@@ -60,7 +60,8 @@ final class Classifier {
 		$group = self::group_of( $name );
 
 		foreach ( $names as $candidate ) {
-			if ( 0 === strpos( ltrim( $candidate, '_' ), 'wpcu_' ) || 0 === strpos( $candidate, 'wp-cleanup' ) ) {
+			// Our own names, plus the ALPS flag this plugin writes on converted images.
+			if ( 0 === strpos( ltrim( $candidate, '_' ), 'wpcu_' ) || 0 === strpos( $candidate, 'wp-cleanup' ) || ltrim( strtolower( Media_Policy::ALPS_FLAG ), '_' ) === ltrim( $candidate, '_' ) ) {
 				return $this->result( Plugin::STATUS_IN_USE, 'WP Cleanup', 'wp-cleanup', 'high', __( 'Used by WP Cleanup itself.', 'wp-cleanup' ), $group );
 			}
 		}

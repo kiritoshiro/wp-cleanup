@@ -246,7 +246,10 @@ wpcu_assert( 'Yoast SEO' === $by['option|wpseo_titles']['owner'], 'wpseo_titles 
 wpcu_assert( 'WPCU Fixture Inactive' === $by['option|fixinact_settings']['owner'], 'fixinact_settings attributed to the inactive fixture' );
 wpcu_assert( ! empty( $by['option|wpseo_titles']['autoload'] ), 'autoload flag detected' );
 wpcu_assert( 1 === $by['orphan|postmeta']['count'], 'exactly one orphaned postmeta row counted' );
-wpcu_assert( 2 === $by['orphan|expired_transients']['count'], 'expired transient value + timeout counted' );
+$expired_def   = WPCleanup\Scanner::orphan_kinds()['expired_transients'];
+$expired_names = $wpdb->get_col( "SELECT t.option_name FROM {$expired_def['table']} t WHERE {$expired_def['where']}" );
+wpcu_assert( in_array( '_transient_zzexp', $expired_names, true ) && in_array( '_transient_timeout_zzexp', $expired_names, true ) && ! in_array( '_transient_zzlive', $expired_names, true ), 'expired transient value + timeout counted, live one not' );
+wpcu_assert( count( $expired_names ) === $by['orphan|expired_transients']['count'], 'expired transient count matches its rows' );
 $non_core_fresh = array_filter(
 	$result['items'],
 	static function ( $i ) {

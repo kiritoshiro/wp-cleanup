@@ -85,6 +85,143 @@
 		} );
 	}
 
+	var media = document.querySelector( '.wpcu-media-form' );
+
+	if ( media ) {
+		var mRows = Array.prototype.slice.call( media.querySelectorAll( '.wpcu-items tbody tr[data-id]' ) );
+		var mSearch = media.querySelector( '.wpcu-filter-search' );
+		var mCount = media.querySelector( '.wpcu-visible-count' );
+		var progress = media.querySelector( '.wpcu-media-progress' );
+		var status = media.querySelector( '.wpcu-media-status' );
+		var stopButton = media.querySelector( '.wpcu-media-stop' );
+		var runButtons = media.querySelectorAll( '.wpcu-media-run' );
+		var stopRequested = false;
+
+		var mApply = function () {
+			var term = mSearch.value.trim().toLowerCase();
+			var visible = 0;
+			mRows.forEach( function ( row ) {
+				var show = ! term || row.getAttribute( 'data-search' ).indexOf( term ) !== -1;
+				row.hidden = ! show;
+				visible += show ? 1 : 0;
+			} );
+			mCount.textContent = visible + ' / ' + mRows.length;
+		};
+		mSearch.addEventListener( 'input', mApply );
+		mApply();
+
+		media.querySelector( '.wpcu-check-all' ).addEventListener( 'change', function ( event ) {
+			mRows.forEach( function ( row ) {
+				if ( ! row.hidden ) {
+					row.querySelector( 'input[type=checkbox]' ).checked = event.target.checked;
+				}
+			} );
+		} );
+
+		var setBusy = function ( busy ) {
+			Array.prototype.forEach.call( runButtons, function ( b ) {
+				b.disabled = busy;
+			} );
+			stopButton.hidden = ! busy;
+			progress.hidden = false;
+		};
+
+		var post = function ( ids, backup ) {
+			var body = new URLSearchParams();
+			body.append( 'action', 'wpcu_media_batch' );
+			body.append( '_ajax_nonce', wpCleanup.mediaNonce );
+			body.append( 'backup', backup || '' );
+			ids.forEach( function ( id ) {
+				body.append( 'ids[]', id );
+			} );
+			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( r ) {
+				return r.json();
+			} );
+		};
+
+		Array.prototype.forEach.call( runButtons, function ( button ) {
+			button.addEventListener( 'click', function () {
+				var ids = mRows.filter( function ( row ) {
+					return 'all' === button.getAttribute( 'data-scope' ) || row.querySelector( 'input[type=checkbox]' ).checked;
+				} ).map( function ( row ) {
+					return row.getAttribute( 'data-id' );
+				} );
+				if ( ! ids.length ) {
+					window.alert( wpCleanup.nothing );
+					return;
+				}
+				if ( ! media.querySelector( '.wpcu-media-confirm' ).checked ) {
+					window.alert( wpCleanup.mediaConfirmBox );
+					return;
+				}
+				if ( ! window.confirm( wpCleanup.confirmMedia.replace( '%d', ids.length ) ) ) {
+					return;
+				}
+
+				var total = ids.length;
+				var done = 0;
+				var tally = { converted: 0, failed: 0, other: 0 };
+				var backup = '';
+				stopRequested = false;
+				setBusy( true );
+				progress.max = total;
+
+				var finish = function ( message ) {
+					setBusy( false );
+					status.textContent = message;
+				};
+
+				var next = function () {
+					if ( stopRequested ) {
+						finish( wpCleanup.mediaStopped + ' ' + wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
+						return;
+					}
+					var chunk = ids.slice( done, done + 3 );
+					if ( ! chunk.length ) {
+						finish( wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
+						return;
+					}
+					status.textContent = done + ' / ' + total + '…';
+					post( chunk, backup ).then( function ( json ) {
+						if ( ! json || ! json.success ) {
+							finish( ( json && json.data && json.data.message ) || 'Request failed.' );
+							return;
+						}
+						backup = json.data.backup;
+						json.data.results.forEach( function ( r ) {
+							var row = media.querySelector( 'tr[data-id="' + r.id + '"]' );
+							if ( row ) {
+								row.querySelector( '.wpcu-result' ).textContent = r.status + ': ' + r.message;
+								row.classList.add( 'wpcu-row-' + r.status );
+								var box = row.querySelector( 'input[type=checkbox]' );
+								box.checked = false;
+								box.disabled = 'converted' === r.status;
+							}
+							if ( 'converted' === r.status ) {
+								tally.converted++;
+							} else if ( 'failed' === r.status ) {
+								tally.failed++;
+							} else {
+								tally.other++;
+							}
+						} );
+						done += chunk.length;
+						progress.value = done;
+						next();
+					} ).catch( function ( error ) {
+						finish( String( error ) );
+					} );
+				};
+				next();
+			} );
+		} );
+
+		stopButton.addEventListener( 'click', function () {
+			stopRequested = true;
+			stopButton.disabled = true;
+		} );
+	}
+
 	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-wpcu_restore, .wpcu-wpcu_delete_backup' ), function ( f ) {
 		f.addEventListener( 'submit', function ( event ) {
 			var message = f.classList.contains( 'wpcu-wpcu_restore' ) ? wpCleanup.confirmRestore : wpCleanup.confirmPurge;
