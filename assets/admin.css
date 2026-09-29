@@ -1,0 +1,49 @@
+.wpcu-toolbar { margin: 12px 0 16px; }
+.wpcu-toolbar form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.wpcu-inline { color: #50575e; }
+.wpcu-count { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 4px; border-radius: 9px; background: #d63638; color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.wpcu-empty { margin-top: 20px; padding: 24px; background: #fff; border: 1px solid #c3c4c7; }
+
+.wpcu-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 20px 0; }
+.wpcu-card { background: #fff; border: 1px solid #c3c4c7; padding: 16px; }
+.wpcu-card-title { color: #50575e; font-size: 13px; }
+.wpcu-card-value { font-size: 26px; font-weight: 600; margin-top: 6px; }
+.wpcu-card-hint { color: #787c82; font-size: 12px; margin-top: 6px; }
+
+.wpcu-summary td, .wpcu-summary th { text-align: left; }
+.wpcu-legend dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; align-items: center; max-width: 900px; }
+.wpcu-legend dd { margin: 0; }
+
+.wpcu-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
+.wpcu-orphaned { background: #fcf0f1; color: #8a2424; border-color: #f0b4b5; }
+.wpcu-safe { background: #edfaef; color: #1a6b2c; border-color: #9ed9a8; }
+.wpcu-unknown { background: #fcf9e8; color: #6e5300; border-color: #e6d28a; }
+.wpcu-inactive { background: #f0f6fc; color: #135e96; border-color: #9ec2e6; }
+.wpcu-in_use { background: #f6f7f7; color: #3c434a; border-color: #dcdcde; }
+.wpcu-core { background: #f6f7f7; color: #787c82; border-color: #dcdcde; }
+.wpcu-confidence { font-size: 11px; color: #787c82; }
+.wpcu-conf-low { color: #b32d2e; }
+.wpcu-muted { color: #a7aaad; }
+.wpcu-autoload { color: #b32d2e; font-weight: 600; }
+
+.wpcu-filters { display: flex; gap: 12px; align-items: center; margin: 16px 0 8px; flex-wrap: wrap; }
+.wpcu-filter-search { min-width: 260px; }
+.wpcu-visible-count { color: #787c82; }
+.wpcu-items .num { text-align: right; white-space: nowrap; }
+.wpcu-items .wpcu-name code { word-break: break-all; background: none; padding: 0; }
+.wpcu-items .wpcu-reason { color: #50575e; font-size: 12px; max-width: 420px; }
+.wpcu-items tr[hidden] { display: none; }
+
+.wpcu-actions { position: sticky; bottom: 0; background: #f0f0f1; padding: 12px 0; border-top: 1px solid #c3c4c7; margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.wpcu-actions p { margin: 4px 0 0; }
+.wpcu .button.wpcu-delete { background: #d63638; border-color: #d63638; }
+.wpcu .button.wpcu-delete:hover, .wpcu .button.wpcu-delete:focus { background: #b32d2e; border-color: #b32d2e; }
+.wpcu-attention { outline: 2px solid #d63638; outline-offset: 2px; }
+.wpcu-details { max-height: 260px; overflow: auto; margin: 6px 0; font-family: Consolas, Monaco, monospace; font-size: 12px; }
+.wpcu-backup-actions { display: flex; gap: 6px; }
+.wpcu-backup-actions form { margin: 0; }
+
+@media (max-width: 782px) {
+	.wpcu-items .wpcu-reason { display: none; }
+	.wpcu-filter-search { min-width: 0; width: 100%; }
+}
