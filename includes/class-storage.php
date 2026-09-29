@@ -149,6 +149,14 @@ final class Storage {
 			}
 			$ok = self::rmtree( $dir . '/' . $entry ) && $ok;
 		}
-		return @rmdir( $dir ) && $ok; // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		// Windows finishes deleting a file only once scanners/indexers release it; retry briefly.
+		for ( $try = 0; $try < 5; $try++ ) {
+			if ( @rmdir( $dir ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+				return $ok;
+			}
+			clearstatcache();
+			usleep( 200000 );
+		}
+		return false;
 	}
 }

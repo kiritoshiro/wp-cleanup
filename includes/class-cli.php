@@ -254,6 +254,124 @@ final class CLI {
 	}
 
 	/**
+	 * Convert images to AVIF (full + one small size) and move every other size into a backup set.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <action>
+	 * : status | convert
+	 * ---
+	 * options:
+	 *   - status
+	 *   - convert
+	 * ---
+	 *
+	 * [--ids=<ids>]
+	 * : Comma-separated attachment ids (default: every eligible image).
+	 *
+	 * [--limit=<n>]
+	 * : Convert at most this many.
+	 *
+	 * [--dry-run]
+	 * : Report what would change.
+	 *
+	 * [--yes]
+	 * : Do not ask for confirmation.
+	 *
+	 * [--format=<format>]
+	 * : For status: table, json, csv. Default: table.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp cleanup images status
+	 *     wp cleanup images convert --limit=20 --dry-run
+	 *     wp cleanup images convert --ids=123,456 --yes
+	 *
+	 * @param array $args  Positional.
+	 * @param array $assoc Associative.
+	 */
+	public function images( $args, $assoc ) {
+		$s = Media_Policy::settings();
+		if ( 'status' === $args[0] ) {
+			$r = Media_Report::build_and_store();
+			\WP_CLI::log( sprintf( 'Policy: AVIF full <= %dpx + "%s" <= %dpx%s. AVIF support: %s.', $s['full_max'], $s['small_name'], $s['small_max'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
+			\WP_CLI::log( sprintf( '%d images: %d to convert (%d files, %s, incl. %d stray files %s), %d already compliant, %d skipped.', $r['total'], $r['eligible'], $r['files'], size_format( $r['bytes'], 1 ), $r['strays'], size_format( $r['stray_b'], 1 ), $r['compliant'], $r['skipped'] ) );
+			foreach ( $r['reasons'] as $reason => $count ) {
+				\WP_CLI::log( sprintf( '  skipped %d: %s', $count, $reason ) );
+			}
+			if ( $r['items'] ) {
+				$rows = array_map(
+					static function ( $i ) {
+						return array(
+							'id'     => $i['id'],
+							'file'   => $i['file'],
+							'size'   => $i['width'] . 'x' . $i['height'],
+							'files'  => $i['files'],
+							'strays' => $i['strays'],
+							'bytes'  => size_format( $i['bytes'], 1 ),
+						);
+					},
+					$r['items']
+				);
+				\WP_CLI\Utils\format_items( \WP_CLI\Utils\get_flag_value( $assoc, 'format', 'table' ), $rows, array( 'id', 'file', 'size', 'files', 'strays', 'bytes' ) );
+			}
+			return;
+		}
+
+		$ids = ! empty( $assoc['ids'] )
+			? array_filter( array_map( 'intval', explode( ',', $assoc['ids'] ) ) )
+			: wp_list_pluck( Media_Report::build()['items'], 'id' );
+		if ( ! empty( $assoc['limit'] ) ) {
+			$ids = array_slice( $ids, 0, max( 1, (int) $assoc['limit'] ) );
+		}
+		if ( ! $ids ) {
+			\WP_CLI::success( 'Nothing to convert.' );
+			return;
+		}
+		$dry = (bool) \WP_CLI\Utils\get_flag_value( $assoc, 'dry-run', false );
+		if ( ! $dry ) {
+			if ( ! Media_Policy::avif_supported() ) {
+				\WP_CLI::error( 'This server cannot write AVIF images (needs WordPress 6.5+ and AVIF-capable GD or Imagick).' );
+			}
+			\WP_CLI::confirm( sprintf( 'Convert %d image(s)? Old files are moved into a backup set.', count( $ids ) ), $assoc );
+		}
+
+		$backup = $dry ? null : Backup::start();
+		$tally  = array( 'converted' => 0, 'failed' => 0, 'before' => 0, 'after' => 0 );
+		foreach ( $ids as $id ) {
+			$r = Media_Converter::convert( $id, $backup, $dry );
+			\WP_CLI::log( sprintf( '#%d %-9s %s', $id, $r['status'], $r['message'] ) );
+			if ( 'converted' === $r['status'] ) {
+				++$tally['converted'];
+				$tally['before'] += $r['bytes_before'];
+				$tally['after']  += $r['bytes_after'];
+			} elseif ( 'failed' === $r['status'] ) {
+				++$tally['failed'];
+			}
+		}
+		if ( $dry ) {
+			\WP_CLI::success( 'Dry run finished.' );
+			return;
+		}
+		wp_cache_flush();
+		Media_Report::forget( $ids );
+		$msg = sprintf(
+			'Converted %d, failed %d. %s of old files moved into backup set %s; new AVIF files use %s. Delete that set (wp cleanup delete-backup %s) once the site looks right to free the space.',
+			$tally['converted'],
+			$tally['failed'],
+			size_format( $tally['before'], 1 ),
+			$backup->id,
+			size_format( $tally['after'], 1 ),
+			$backup->id
+		);
+		if ( $tally['failed'] ) {
+			\WP_CLI::warning( $msg );
+			\WP_CLI::halt( 1 );
+		}
+		\WP_CLI::success( $msg );
+	}
+
+	/**
 	 * @param array $item Item.
 	 */
 	private static function key( array $item ) {

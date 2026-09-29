@@ -17,6 +17,42 @@ Scanning only reads. Nothing changes until you choose items and confirm.
 | Orphaned rows | Meta or term links whose object no longer exists, and expired transients |
 | Folders | Top-level folders in `uploads/` and `wp-content/` (e.g. `wflogs`, `woocommerce_uploads`) |
 
+## Images: AVIF, two sizes at most
+
+WordPress keeps several copies of every uploaded image: the original, a `-scaled` copy, `thumbnail`, `medium`, `medium_large`, `large`, `1536x1536`, `2048x2048`, and any sizes themes and plugins add. Folders often also hold thumbnails from old themes, and `.jpg.webp` sidecars from optimizer plugins.
+
+**Tools → WP Cleanup → Images** (or `wp cleanup images`) turns each JPEG, PNG or AVIF attachment into:
+
+- **full**: one AVIF, longest side at most **1920 px**
+- **`alps-small`**: one AVIF, longest side at most **768 px**, only when the image is bigger than that
+
+These defaults match the Adventistai ALPS theme's upload policy. Converted images get that theme's `_alps_two_size_upload` flag, so its templates map old size names (`thumbnail`, `large`, `horiz__16x9--m`, …) to these two files. Old images end up in exactly the same shape as new uploads. The sizes, size name and flag can all be changed under *Image policy*.
+
+How each image is converted:
+
+1. **Encode and verify.** The AVIFs are made from the best available source (the pre-`-scaled` original, or the edited version if the image was edited in WordPress). EXIF rotation is applied and transparency kept. Each new file is checked to decode with the right size and type before anything else happens.
+2. **Rewrite references.** Every place that links to one of the old files is rewritten to the kept file: post content, excerpts, revisions, post/term/user meta, options and comments. Links to a small size point at `alps-small`, everything else at full. This covers absolute, relative and CDN URLs, and JSON-escaped block or page-builder data. Serialized values are unserialized and rewritten properly, never string-replaced. Stored `srcset` attributes are rebuilt with real widths. If a URL sits inside a serialized PHP object, that image is **left untouched** and reported.
+3. **Back up.** Column-level before-images of everything that changes are written to a backup set.
+4. **Move the old files** (original, `-scaled`, every size, strays, sidecars) into the backup set. Any failure along the way rolls that image back completely.
+
+**Never touched:** GIF and WebP (they can be animated), site icons, custom headers and backgrounds, and files that aren't on this server (for example, offloaded to S3).
+
+**Space is only freed once you delete the backup set** on the Backups tab, after checking the site. Until then, **Restore** puts every original file and every rewritten value back. It refuses, per image, if the image or a rewritten row has been edited since.
+
+Requirements: WordPress 6.5+ with GD or Imagick built with AVIF support. The Images tab says whether the server has it.
+
+```bash
+wp cleanup images status
+wp cleanup images convert --limit=20 --dry-run
+wp cleanup images convert --yes
+```
+
+Limits:
+- URLs stored in custom plugin tables aren't rewritten. Yoast's indexables are one example; they refresh themselves.
+- A text mention of the exact same `uploads/…/file.jpg` path on another site would also be rewritten.
+- New uploads keep generating every size unless the theme limits them; the ALPS theme does.
+- A small AVIF can get a `-1` suffix (`photo-768x512-1.avif`) when the old JPEG of that name still exists at conversion time.
+
 ## How it decides
 
 Each item gets a status, based on evidence in this order:
@@ -74,7 +110,17 @@ The integration suite is **destructive** and refuses to run unless `WPCU_TESTS=1
 bin/test-setup.sh /path/to/throwaway-wordpress "wp"
 cd /path/to/throwaway-wordpress
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/run.php
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images.php   # needs AVIF support
 ```
+
+The image suite (42 assertions) covers:
+- inventory, including strays, sidecars and same-name neighbours
+- conversion sizes, the ALPS flag and transparency
+- reference rewriting in HTML, relative URLs, JSON-escaped and serialized data, and `srcset`
+- refusing URLs inside PHP objects, and full rollback after an injected failure
+- a byte-identical restore
+- restore refusing to overwrite later edits
+- idempotence
 
 The suite covers:
 - classification of seeded leftovers from fake active, inactive and removed plugins
