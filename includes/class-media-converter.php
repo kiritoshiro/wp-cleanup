@@ -295,7 +295,10 @@ final class Media_Converter {
 	private static function update_attachment( $id, array $inv, array $full, $small, $rotated, array $s ) {
 		global $wpdb;
 		$meta             = $inv['meta'];
-		$meta['file']     = _wp_relative_upload_path( $full['path'] );
+		// Compute the uploads-relative path ourselves: _wp_relative_upload_path() compares raw strings,
+		// so on Windows "C:/…" (normalized) never matches a "C:\…" basedir and an absolute path is stored.
+		$relative         = self::rel( $full['path'] );
+		$meta['file']     = $relative;
 		$meta['width']    = $full['width'];
 		$meta['height']   = $full['height'];
 		$meta['filesize'] = (int) filesize( $full['path'] );
@@ -314,7 +317,10 @@ final class Media_Converter {
 			$meta['image_meta']['orientation'] = 1;
 		}
 
-		update_attached_file( $id, $full['path'] );
+		update_attached_file( $id, $relative ); // Already relative, so it is stored as given.
+		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $full['path'] ) {
+			throw new \RuntimeException( __( 'The new file path could not be stored correctly.', 'wp-cleanup' ) );
+		}
 		$wpdb->update( $wpdb->posts, array( 'post_mime_type' => 'image/avif' ), array( 'ID' => $id ) );
 		delete_post_meta( $id, '_wp_attachment_backup_sizes' );
 		if ( $s['set_flag'] ) {

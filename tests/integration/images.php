@@ -29,6 +29,24 @@ require_once ABSPATH . 'wp-admin/includes/image.php';
 require_once ABSPATH . 'wp-admin/includes/file.php';
 require_once ABSPATH . 'wp-admin/includes/media.php';
 
+// Reproduce the web-server path spelling on Windows ("C:\site/wp-content/uploads"), which WP-CLI
+// hides by using forward slashes; a mismatch once stored absolute paths as _wp_attached_file.
+if ( '\\' === DIRECTORY_SEPARATOR ) {
+	add_filter(
+		'upload_dir',
+		static function ( $u ) {
+			$abs = untrailingslashit( wp_normalize_path( ABSPATH ) );
+			foreach ( array( 'basedir', 'path' ) as $k ) {
+				$v = wp_normalize_path( $u[ $k ] );
+				if ( 0 === strpos( $v, $abs ) ) {
+					$u[ $k ] = str_replace( '/', '\\', $abs ) . substr( $v, strlen( $abs ) );
+				}
+			}
+			return $u;
+		}
+	);
+}
+
 global $wpdb;
 $GLOBALS['wpcu_f'] = 0;
 $GLOBALS['wpcu_p'] = 0;
@@ -199,6 +217,10 @@ wpcu_ok( 'skipped' === $results[ $gif ]['status'], 'GIF skipped: ' . $results[ $
 
 $m = wp_get_attachment_metadata( $big );
 wpcu_ok( 'image/avif' === get_post_mime_type( $big ) && '.avif' === substr( get_attached_file( $big ), -5 ), 'big is an AVIF attachment now' );
+$stored = get_post_meta( $big, '_wp_attached_file', true );
+wpcu_ok( $subdir . '/wpcut-big.avif' === $stored && is_file( get_attached_file( $big ) ), "stored path is uploads-relative and resolves (got $stored)" );
+wpcu_ok( $subdir . '/wpcut-big.avif' === wp_get_attachment_metadata( $big )['file'], 'metadata file is uploads-relative' );
+wpcu_ok( wp_get_attachment_url( $big ) === $u( 'wpcut-big.avif' ), 'attachment URL is correct: ' . wp_get_attachment_url( $big ) );
 wpcu_ok( 1920 === $m['width'] && 1280 === $m['height'], 'full capped at 1920 (got ' . $m['width'] . 'x' . $m['height'] . ')' );
 wpcu_ok( array( 'alps-small' ) === array_keys( $m['sizes'] ) && 768 === $m['sizes']['alps-small']['width'], 'only alps-small (768 wide) remains' );
 wpcu_ok( ! isset( $m['original_image'] ) && '1' === (string) get_post_meta( $big, Media_Policy::ALPS_FLAG, true ), 'original_image dropped, ALPS flag set' );
