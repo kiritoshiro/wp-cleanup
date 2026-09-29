@@ -66,9 +66,11 @@ final class Media_Converter {
 			return $result;
 		}
 		if ( ! $backup instanceof Backup ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( __( 'Images are only converted into a backup set.', 'wp-cleanup' ) );
 		}
 		if ( ! Media_Policy::avif_supported() ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( __( 'This server cannot write AVIF images.', 'wp-cleanup' ) );
 		}
 
@@ -200,10 +202,12 @@ final class Media_Converter {
 
 		$editor = wp_get_image_editor( $source );
 		if ( is_wp_error( $editor ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( $editor->get_error_message() );
 		}
 		$rotated = method_exists( $editor, 'maybe_exif_rotate' ) ? $editor->maybe_exif_rotate() : false;
 		if ( is_wp_error( $rotated ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( $rotated->get_error_message() );
 		}
 		$size   = $editor->get_size();
@@ -217,6 +221,7 @@ final class Media_Converter {
 			);
 		} else {
 			if ( $resize && is_wp_error( $err = $editor->resize( $s['full_max'], $s['full_max'], false ) ) ) { // phpcs:ignore
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( $err->get_error_message() );
 			}
 			$full = self::save( $editor, $inv['dir'], $inv['base'] . '.avif', $created );
@@ -227,10 +232,12 @@ final class Media_Converter {
 		if ( max( $full['width'], $full['height'] ) > $s['small_max'] ) {
 			$editor = wp_get_image_editor( $full['path'] );
 			if ( is_wp_error( $editor ) ) {
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( $editor->get_error_message() );
 			}
 			$err = $editor->resize( $s['small_max'], $s['small_max'], false );
 			if ( is_wp_error( $err ) ) {
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( $err->get_error_message() );
 			}
 			$dims  = $editor->get_size();
@@ -251,6 +258,7 @@ final class Media_Converter {
 		$dest  = $dir . '/' . wp_unique_filename( $dir, $name );
 		$saved = $editor->save( $dest, 'image/avif' );
 		if ( is_wp_error( $saved ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( $saved->get_error_message() );
 		}
 		$created[] = wp_normalize_path( $saved['path'] );
@@ -270,6 +278,7 @@ final class Media_Converter {
 		$info = is_file( $file['path'] ) && filesize( $file['path'] ) > 0 ? wp_getimagesize( $file['path'] ) : false;
 		if ( ! $info || 'image/avif' !== ( isset( $info['mime'] ) ? $info['mime'] : '' ) || (int) $info[0] !== (int) $file['width'] || (int) $info[1] !== (int) $file['height'] ) {
 			/* translators: %s: file */
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( sprintf( __( 'The new AVIF file %s did not verify.', 'wp-cleanup' ), wp_basename( $file['path'] ) ) );
 		}
 	}
@@ -319,6 +328,7 @@ final class Media_Converter {
 
 		update_attached_file( $id, $relative ); // Already relative, so it is stored as given.
 		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $full['path'] ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( __( 'The new file path could not be stored correctly.', 'wp-cleanup' ) );
 		}
 		$wpdb->update( $wpdb->posts, array( 'post_mime_type' => 'image/avif' ), array( 'ID' => $id ) );
@@ -372,6 +382,7 @@ final class Media_Converter {
 
 		// Refuse rather than overwrite anything edited since the conversion.
 		if ( isset( $extra['meta_hash'] ) && self::meta_hash( $id ) !== $extra['meta_hash'] ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( __( 'The attachment was changed after the cleanup; not restoring it.', 'wp-cleanup' ) );
 		}
 		foreach ( (array) ( isset( $extra['rows'] ) ? $extra['rows'] : array() ) as $row ) {
@@ -379,6 +390,7 @@ final class Media_Converter {
 			$now = $wpdb->get_var( $wpdb->prepare( 'SELECT `' . Backup::ident( $column ) . '` FROM `' . Backup::ident( $table ) . '` WHERE `' . Backup::ident( $pk ) . '` = %s', $row_id ) ); // phpcs:ignore
 			if ( null !== $now && md5( $now ) !== $hash ) {
 				/* translators: 1: table, 2: row id */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( 'Row %2$s in %1$s was edited after the cleanup; not restoring this image.', 'wp-cleanup' ), $table, $row_id ) );
 			}
 		}
@@ -386,10 +398,12 @@ final class Media_Converter {
 		foreach ( $moved as $rel ) {
 			if ( file_exists( $uploads . '/' . $rel ) ) {
 				/* translators: %s: file */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( '%s exists again; not overwriting it.', 'wp-cleanup' ), $rel ) );
 			}
 			if ( ! is_file( $qdir . '/' . $rel ) ) {
 				/* translators: %s: file */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( '%s is missing from the backup set.', 'wp-cleanup' ), $rel ) );
 			}
 		}
@@ -398,6 +412,7 @@ final class Media_Converter {
 		foreach ( $moved as $rel ) {
 			if ( ! @rename( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore
 				/* translators: %s: file */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( 'Could not move %s back.', 'wp-cleanup' ), $rel ) );
 			}
 		}

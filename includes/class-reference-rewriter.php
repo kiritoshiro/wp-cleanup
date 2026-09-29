@@ -174,6 +174,7 @@ final class Reference_Rewriter {
 			);
 			if ( 1 !== (int) $updated ) {
 				/* translators: 1: table, 2: row id */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( 'Row %2$s in %1$s changed during the update.', 'wp-cleanup' ), $c['table'], $c['id'] ) );
 			}
 			++$done;
@@ -193,6 +194,7 @@ final class Reference_Rewriter {
 			if ( false === $data && 'b:0;' !== trim( $value ) ) {
 				if ( $this->replace_text( $value ) !== $value ) {
 					/* translators: %s: row */
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 					throw new \RuntimeException( sprintf( __( 'Could not safely rewrite a broken serialized value (%s).', 'wp-cleanup' ), $where ) );
 				}
 				return $value;
@@ -222,6 +224,7 @@ final class Reference_Rewriter {
 			// Objects (often __PHP_Incomplete_Class here) cannot be edited safely.
 			if ( $this->replace_text( serialize( $data ) ) !== serialize( $data ) ) {
 				/* translators: %s: row */
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( 'An image URL is stored inside a PHP object (%s); rewrite it manually.', 'wp-cleanup' ), $where ) );
 			}
 			return $data;

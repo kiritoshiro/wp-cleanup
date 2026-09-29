@@ -143,6 +143,7 @@ final class Cleaner {
 			case 'file':
 				return $this->quarantine_folder( $item['id'], $backup, $n );
 		}
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 		throw new \RuntimeException( __( 'Unsupported item type.', 'wp-cleanup' ) );
 	}
 
@@ -163,6 +164,7 @@ final class Cleaner {
 		}
 		$left = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name IN ($placeholders)", $names ) ); // phpcs:ignore
 		if ( $left ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'The option still exists after deletion (a filter may have blocked it).', 'wp-cleanup' ) );
 		}
 		/* translators: %d: rows */
@@ -172,12 +174,14 @@ final class Cleaner {
 	private function delete_table( $table, $backup, $n ) {
 		global $wpdb;
 		if ( 0 !== strpos( $table, $wpdb->prefix ) || ! preg_match( '/^[A-Za-z0-9_$]+$/', $table ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Unexpected table name.', 'wp-cleanup' ) );
 		}
 		if ( $backup ) {
 			$backup->write_table( $n, $table );
 		}
 		if ( false === $wpdb->query( 'DROP TABLE `' . Backup::ident( $table ) . '`' ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( $wpdb->last_error ? $wpdb->last_error : __( 'DROP TABLE failed.', 'wp-cleanup' ) );
 		}
 		return __( 'Table dropped.', 'wp-cleanup' );
@@ -204,6 +208,7 @@ final class Cleaner {
 		}
 		$result = wp_unschedule_hook( $hook, true );
 		if ( is_wp_error( $result ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( $result->get_error_message() );
 		}
 		/* translators: %d: events */
@@ -214,6 +219,7 @@ final class Cleaner {
 		global $wpdb;
 		$table = _get_meta_table( $meta_type );
 		if ( ! $table ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Unknown meta type.', 'wp-cleanup' ) );
 		}
 		$pk    = 'user' === $meta_type ? 'umeta_id' : 'meta_id';
@@ -239,6 +245,7 @@ final class Cleaner {
 	private function delete_post_type( $post_type, $backup, $n ) {
 		global $wpdb;
 		if ( in_array( $post_type, Protected_Names::CORE_POST_TYPES, true ) || post_type_exists( $post_type ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Post type is core or registered.', 'wp-cleanup' ) );
 		}
 		$posts    = 0;
@@ -279,6 +286,7 @@ final class Cleaner {
 			$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN ($all)" ); // phpcs:ignore
 			$deleted = $wpdb->query( "DELETE FROM {$wpdb->posts} WHERE ID IN ($all)" ); // phpcs:ignore
 			if ( ! $deleted ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 				throw new \RuntimeException( $wpdb->last_error ? $wpdb->last_error : __( 'Could not delete posts.', 'wp-cleanup' ) );
 			}
 			foreach ( array_merge( $ids, $revision ) as $id ) {
@@ -318,6 +326,7 @@ final class Cleaner {
 		global $wpdb;
 		$kinds = Scanner::orphan_kinds();
 		if ( ! isset( $kinds[ $kind ] ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Unknown orphan kind.', 'wp-cleanup' ) );
 		}
 		$def   = $kinds[ $kind ];
@@ -354,14 +363,17 @@ final class Cleaner {
 	private function quarantine_folder( $id, $backup, $n ) {
 		$path = Scanner::folder_path( $id );
 		if ( ! $path || ! is_dir( $path ) || is_link( $path ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Folder not found.', 'wp-cleanup' ) );
 		}
 		if ( ! $backup ) {
 			// Without a backup set there is nowhere to quarantine; refuse rather than hard-delete.
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Folders are only moved into a backup set; run with a backup.', 'wp-cleanup' ) );
 		}
 		$target = $backup->quarantine_dir( $n ) . '/' . basename( $path );
 		if ( ! @rename( $path, $target ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not move the folder (is it on another filesystem or locked?).', 'wp-cleanup' ) );
 		}
 		return __( 'Folder moved into the backup set.', 'wp-cleanup' );

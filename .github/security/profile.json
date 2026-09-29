@@ -1,0 +1,10 @@
+{
+  "category": "WordPress plugin",
+  "source_paths": [
+    "."
+  ],
+  "semgrep_rules": [
+    "p/php",
+    "p/javascript"
+  ]
+}

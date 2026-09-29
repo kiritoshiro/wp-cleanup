@@ -51,6 +51,7 @@ final class Storage {
 	public static function ensure_protected_dir( $dir ) {
 		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
 			/* translators: %s: directory path */
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( sprintf( __( 'Could not create directory %s', 'wp-cleanup' ), $dir ) );
 		}
 		$guards = array(
@@ -82,6 +83,7 @@ final class Storage {
 		$json = wp_json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE );
 		if ( false === $json || false === file_put_contents( self::path( $name ), $json, LOCK_EX ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
 			/* translators: %s: file name */
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( sprintf( __( 'Could not write %s', 'wp-cleanup' ), $name ) );
 		}
 	}
