@@ -1,6 +1,8 @@
 name: Cybersecurity baseline
 'on':
   pull_request: null
+  push:
+    branches: [main]
   schedule:
   - cron: 13 6 * * 2
   workflow_dispatch: null
@@ -49,7 +51,7 @@ jobs:
       if: ${{ !cancelled() }}
       run: pipx run --spec zizmor==1.30.1 zizmor --no-online-audits --min-severity medium .github/
     - name: Dependencies and configuration (Trivy)
-      if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+      if: ${{ !cancelled() }}
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
       with:
         version: v0.74.0
@@ -60,19 +62,19 @@ jobs:
         ignore-unfixed: false
         exit-code: '1'
     - name: Set up PHP for WordPress checks
-      if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+      if: ${{ !cancelled() }}
       uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
       with:
         php-version: '8.4'
         coverage: none
         tools: composer:v2
     - name: Install isolated, locked WordPress QA tools
-      if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+      if: ${{ !cancelled() }}
       run: 'composer install --working-dir=.github/security --no-interaction --no-progress --prefer-dist --no-scripts --no-plugins
 
         .github/security/vendor/bin/phpcs --config-set installed_paths ../../wp-coding-standards/wpcs,../../phpcsstandards/phpcsextra,../../phpcsstandards/phpcsutils'
     - name: WordPress security (PHPCS)
-      if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+      if: ${{ !cancelled() }}
       run: .github/security/vendor/bin/phpcs --standard=.github/security/phpcs.xml .
     - name: Workflow syntax (actionlint)
       if: ${{ !cancelled() }}

@@ -129,6 +129,7 @@ final class Backup {
 	public function save() {
 		$json = wp_json_encode( $this->manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE );
 		if ( false === file_put_contents( $this->dir . '/manifest.json', $json, LOCK_EX ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not write the backup manifest.', 'wp-cleanup' ) );
 		}
 	}
@@ -195,6 +196,7 @@ final class Backup {
 	 */
 	public function write_sql( $n, $line ) {
 		if ( false === file_put_contents( $this->sql_file( $n ), $line . "\n", FILE_APPEND | LOCK_EX ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not write the backup file. Is the disk full?', 'wp-cleanup' ) );
 		}
 	}
@@ -244,6 +246,7 @@ final class Backup {
 		global $wpdb;
 		$create = $wpdb->get_row( 'SHOW CREATE TABLE `' . self::ident( $table ) . '`', ARRAY_N ); // phpcs:ignore
 		if ( empty( $create[1] ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not read the table structure.', 'wp-cleanup' ) );
 		}
 		$this->write_sql( $n, str_replace( array( "\r\n", "\n", "\r" ), ' ', $create[1] ) . ';' );
@@ -264,6 +267,7 @@ final class Backup {
 	public function write_json( $n, array $events ) {
 		$json = wp_json_encode( $events, JSON_UNESCAPED_SLASHES );
 		if ( false === file_put_contents( $this->dir . '/item-' . (int) $n . '.json', $json, LOCK_EX ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not write the backup file. Is the disk full?', 'wp-cleanup' ) );
 		}
 	}
@@ -357,11 +361,13 @@ final class Backup {
 				}
 				ksort( $crons );
 				if ( $count && true !== _set_cron_array( $crons, true ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'Could not write the cron schedule.', 'wp-cleanup' ) );
 				}
 				foreach ( (array) $events as $event ) {
 					if ( false === wp_next_scheduled( $event['hook'], isset( $event['args'] ) ? (array) $event['args'] : array() ) ) {
 						/* translators: %s: hook */
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 						throw new \RuntimeException( sprintf( __( 'Event %s is still missing after restore.', 'wp-cleanup' ), $event['hook'] ) );
 					}
 				}
@@ -372,12 +378,15 @@ final class Backup {
 				$source = $this->dir . '/files/' . $n . '/' . basename( (string) Scanner::folder_path( $item['id'] ) );
 				$target = Scanner::folder_path( $item['id'] );
 				if ( ! $target || ! is_dir( $source ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'Quarantined folder not found.', 'wp-cleanup' ) );
 				}
 				if ( file_exists( $target ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'A folder with that name exists again; not overwriting it.', 'wp-cleanup' ) );
 				}
 				if ( ! @rename( $source, $target ) ) { // phpcs:ignore
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'Could not move the folder back.', 'wp-cleanup' ) );
 				}
 				return __( 'Folder moved back.', 'wp-cleanup' );
@@ -385,6 +394,7 @@ final class Backup {
 			default:
 				$file = $this->sql_file( $n );
 				if ( 'table' === $item['type'] && $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $item['id'] ) ) ) ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'The table exists again; not overwriting it.', 'wp-cleanup' ) );
 				}
 				if ( ! is_readable( $file ) ) {
@@ -406,6 +416,7 @@ final class Backup {
 				fclose( $handle ); // phpcs:ignore
 				if ( $errors ) {
 					/* translators: 1: failed statements, 2: all statements, 3: last DB error */
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( sprintf( __( '%1$d of %2$d statements failed: %3$s', 'wp-cleanup' ), $errors, $lines, $wpdb->last_error ) );
 				}
 				/* translators: %d: number of statements */

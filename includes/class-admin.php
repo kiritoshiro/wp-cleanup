@@ -70,13 +70,12 @@ final class Admin {
 	/* ------------------------------------------------------------------ */
 
 	/**
-	 * @param string $action Nonce action.
+	 * Require the administrative capability before any handler reads input.
 	 */
-	private function guard( $action ) {
+	private function guard() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_die( esc_html__( 'You are not allowed to do this.', 'wp-cleanup' ), 403 );
 		}
-		check_admin_referer( $action );
 	}
 
 	/**
@@ -105,7 +104,8 @@ final class Admin {
 	}
 
 	public function handle_scan() {
-		$this->guard( 'wpcu_scan' );
+		$this->guard();
+		check_admin_referer( 'wpcu_scan' );
 		try {
 			$result = ( new Scanner( ! empty( $_POST['fresh'] ) ) )->scan_and_store();
 			$this->notice(
@@ -120,7 +120,8 @@ final class Admin {
 	}
 
 	public function handle_clean() {
-		$this->guard( 'wpcu_clean' );
+		$this->guard();
+		check_admin_referer( 'wpcu_clean' );
 		$tab   = isset( $_POST['tab'] ) ? sanitize_key( wp_unslash( $_POST['tab'] ) ) : '';
 		$items = isset( $_POST['items'] ) ? array_map( 'wp_unslash', (array) $_POST['items'] ) : array(); // phpcs:ignore -- keys are validated against a fresh scan.
 		$items = array_filter( array_map( 'strval', $items ) );
@@ -170,7 +171,8 @@ final class Admin {
 	}
 
 	public function handle_restore() {
-		$this->guard( 'wpcu_restore' );
+		$this->guard();
+		check_admin_referer( 'wpcu_restore' );
 		$backup = Backup::open( isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '' );
 		if ( ! $backup ) {
 			$this->notice( 'error', __( 'Backup set not found.', 'wp-cleanup' ) );
@@ -202,7 +204,8 @@ final class Admin {
 	}
 
 	public function handle_delete_backup() {
-		$this->guard( 'wpcu_delete_backup' );
+		$this->guard();
+		check_admin_referer( 'wpcu_delete_backup' );
 		$backup = Backup::open( isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '' );
 		if ( $backup && $backup->delete() ) {
 			$this->notice( 'success', __( 'Backup set deleted.', 'wp-cleanup' ) );

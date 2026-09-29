@@ -47,3 +47,8 @@ Never ship `.github/security` or its tooling in application packages.
 Public conversion is a separate decision. Review full history, release assets,
 credentials, personal data, licensing and fork restrictions before changing
 visibility. No visibility changes are part of this rollout.
+
+
+## Public repository update — 2026-09-29
+
+Visibility verified public. Heavy Trivy and WordPress security checks now run on every PR, default-branch push, weekly schedule and manual run. CodeQL JavaScript analysis is enabled. Earlier private-only cadence descriptions are superseded by this section. Narrow PHPCS annotations document reviewed validation/output boundaries; maintainer review due 2026-12-29 or when the annotated code changes.
