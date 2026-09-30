@@ -165,7 +165,21 @@
 			var list = document.createElement( 'ul' );
 			entries.forEach( function ( entry ) {
 				var item = document.createElement( 'li' );
-				item.textContent = describe( entry );
+				if ( 'object' === typeof entry ) {
+					item.className = 'wpcu-reference-change';
+					[ [ wpCleanup.mediaLocation, entry.where ], [ wpCleanup.mediaOriginal, entry.from ], [ wpCleanup.mediaNew, entry.to ] ].forEach( function ( pair ) {
+						var line = document.createElement( 'div' );
+						var name = document.createElement( 'strong' );
+						name.textContent = pair[ 0 ] + ': ';
+						line.appendChild( name );
+						var value = document.createElement( 'span' );
+						value.textContent = pair[ 1 ];
+						line.appendChild( value );
+						item.appendChild( line );
+						} );
+				} else {
+					item.textContent = describe( entry );
+				}
 				list.appendChild( item );
 			} );
 			details.appendChild( list );
@@ -310,6 +324,24 @@
 				event.preventDefault();
 				window.alert( wpCleanup.mediaConfirmBox );
 			} else if ( ! window.confirm( wpCleanup.confirmRemove.replace( '%d', selected ) ) ) {
+				event.preventDefault();
+			}
+		} );
+	} );
+
+	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-orphan-form' ), function ( form ) {
+		var count = form.querySelector( '.wpcu-selection-count' );
+		var selected = function () { return new window.FormData( form ).getAll( 'paths[]' ).length; };
+		var update = function () { count.textContent = selected() + ' / 20'; };
+		form.addEventListener( 'change', update );
+		window.addEventListener( 'pageshow', update );
+		update();
+		form.addEventListener( 'submit', function ( event ) {
+			var n = selected();
+			if ( n < 1 || n > 20 ) {
+				event.preventDefault();
+				window.alert( wpCleanup.nothing + ' (1–20)' );
+			} else if ( ! window.confirm( wpCleanup.confirmServerFiles.replace( '%d', n ) ) ) {
 				event.preventDefault();
 			}
 		} );
