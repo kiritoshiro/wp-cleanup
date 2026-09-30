@@ -11,3 +11,8 @@ defined( 'ABSPATH' ) || exit;
 function wpcu_fixture_inactive_settings() {
 	return get_option( 'fixinact_settings' );
 }
+
+// Only the bare prefix: an exact field name in active code must win over this.
+function wpcu_fixture_inactive_legacy( $name ) {
+	return get_option( 'fixcf_' . $name );
+}

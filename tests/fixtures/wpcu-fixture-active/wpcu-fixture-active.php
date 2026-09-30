@@ -27,3 +27,8 @@ function wpcu_fixture_active_table() {
 function wpcu_fixture_active_meta( $post_id ) {
 	return get_post_meta( $post_id, '_fixact_meta', true );
 }
+
+// Carbon Fields-style field names. Values are stored as "_fixcf_hero|slide_image|0|0|value".
+function wpcu_fixture_active_fields() {
+	return array( 'fixcf_hero', 'fixcf_footer' );
+}

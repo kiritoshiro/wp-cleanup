@@ -41,21 +41,39 @@ final class Signatures {
 	}
 
 	/**
-	 * Longest signature prefix matching the name.
+	 * Most specific signature matching the name: an exact name beats any prefix,
+	 * then the longest prefix wins.
 	 *
 	 * @param string $name Normalized name.
-	 * @return array{slug:string,name:string,prefix:string}|null
+	 * @return array{slug:string,name:string,prefix:string,exact:bool}|null
 	 */
 	public static function match( $name ) {
-		$name = ltrim( strtolower( $name ), '_' );
-		$best = null;
+		$name  = ltrim( strtolower( $name ), '_' );
+		$best  = null;
+		$score = -1;
 		foreach ( self::all() as $slug => $entry ) {
 			foreach ( $entry['prefixes'] as $prefix ) {
-				if ( '' !== $prefix && 0 === strpos( $name, $prefix ) && ( ! $best || strlen( $prefix ) > strlen( $best['prefix'] ) ) ) {
-					$best = array( 'slug' => $slug, 'name' => $entry['name'], 'prefix' => $prefix );
+				$exact = self::is_exact( $prefix );
+				$text  = $exact ? substr( $prefix, 0, -1 ) : $prefix;
+				if ( '' === $text || ( $exact ? $name !== $text : 0 !== strpos( $name, $text ) ) ) {
+					continue;
+				}
+				$rank = strlen( $text ) + ( $exact ? 1000 : 0 );
+				if ( $rank > $score ) {
+					$score = $rank;
+					$best  = array( 'slug' => $slug, 'name' => $entry['name'], 'prefix' => $text, 'exact' => $exact );
 				}
 			}
 		}
 		return $best;
+	}
+
+	/**
+	 * Entries ending in "$" name one exact item instead of a prefix.
+	 *
+	 * @param string $prefix Signature entry.
+	 */
+	public static function is_exact( $prefix ) {
+		return '' !== $prefix && '$' === substr( $prefix, -1 );
 	}
 }

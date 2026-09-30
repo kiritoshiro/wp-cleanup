@@ -60,13 +60,13 @@ function wpcu_status( array $by_key, $key ) {
 
 $p       = $wpdb->prefix;
 $uploads = wp_upload_dir( null, false );
-$tables  = array( 'wfconfig', 'fixact_log', 'zzold_table', 'staging_options', 'staging_posts', 'staging_users' );
+$tables  = array( 'wfconfig', 'fixact_log', 'zzold_table', 'staging_options', 'staging_posts', 'staging_users', 'e_events' );
 
 foreach ( $tables as $t ) {
 	$wpdb->query( "DROP TABLE IF EXISTS `{$p}{$t}`" );
 }
-$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name IN ('wpseo_titles','zzleftover_config','fixinact_settings','fixact_settings','fixact_dyn_one','_transient_wpseo_cache','_transient_zzexp','_transient_timeout_zzexp','_transient_zzlive','_transient_timeout_zzlive')" );
-$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN ('_yoast_wpseo_focuskw','_fixact_meta') OR post_id = 999999" );
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name IN ('wpseo_titles','zzleftover_config','fixinact_settings','fixact_settings','fixact_dyn_one','_transient_wpseo_cache','_transient_zzexp','_transient_timeout_zzexp','_transient_zzlive','_transient_timeout_zzlive','_fixcf_footer|||0|value','fixact_settings_3','puc_external_updates_theme-wpcu-fixture-active','external_updates-wpcu-fixture-inactive','external_updates-zzgone-plugin','shop_single_image_size','post_by_email_address4','plugins_delete_result_1')" );
+$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN ('_yoast_wpseo_focuskw','_fixact_meta','_fixcf_hero|slide_image|0|0|value','_zzcf_gone|x|0|0|value','_format_url') OR meta_key LIKE '\\_oembed\\_%' OR post_id = 999999" );
 $wpdb->query( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = '{$p}yoast_notifications'" );
 foreach ( array( 'wpcf7_contact_form', 'fixact_item' ) as $pt ) {
 	foreach ( $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s", $pt ) ) as $id ) {
@@ -130,6 +130,16 @@ remove_filter( 'cron_schedules', $wpcu_sched );
 $post_id = wp_insert_post( array( 'post_title' => 'Host post', 'post_status' => 'publish' ) );
 add_post_meta( $post_id, '_yoast_wpseo_focuskw', 'keyword' );
 add_post_meta( $post_id, '_fixact_meta', 'kept' );
+// Names code builds dynamically (Carbon Fields keys, numeric suffixes, slugs), known leftovers and core caches.
+$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_fixcf_hero|slide_image|0|0|value', 'meta_value' => '12' ) );
+$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_zzcf_gone|x|0|0|value', 'meta_value' => 'old' ) );
+$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_oembed_' . md5( 'https://example.test/v' ), 'meta_value' => '<iframe></iframe>' ) );
+$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_oembed_time_' . md5( 'https://example.test/v' ), 'meta_value' => (string) time() ) );
+$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_format_url', 'meta_value' => 'https://example.test' ) );
+foreach ( array( '_fixcf_footer|||0|value', 'fixact_settings_3', 'puc_external_updates_theme-wpcu-fixture-active', 'external_updates-wpcu-fixture-inactive', 'external_updates-zzgone-plugin', 'shop_single_image_size', 'post_by_email_address4', 'plugins_delete_result_1' ) as $wpcu_name ) {
+	$wpdb->insert( $wpdb->options, array( 'option_name' => $wpcu_name, 'option_value' => 'x', 'autoload' => 'no' ) );
+}
+$wpdb->query( "CREATE TABLE `{$p}e_events` (id INT PRIMARY KEY)" );
 $wpdb->insert( $wpdb->postmeta, array( 'post_id' => 999999, 'meta_key' => '_ghost', 'meta_value' => 'orphan' ) );
 add_user_meta( 1, $p . 'yoast_notifications', 'x' );
 
@@ -213,8 +223,15 @@ $expect = array(
 	'table|' . $p . 'zzold_table'           => 'unknown',
 	'cron|zzold_cron_hook'                  => 'unknown',
 	'file|uploads/zzold-cache'              => 'unknown',
+	'meta|post:_zzcf_gone|x|0|0|value'      => 'unknown', // Carbon Fields key of a field nobody defines.
+	// Known leftovers, labelled by verified signatures.
+	'table|' . $p . 'e_events'              => 'orphaned',
+	'option|shop_single_image_size'         => 'orphaned',
+	'option|post_by_email_address4'         => 'orphaned',
+	'option|external_updates-zzgone-plugin' => 'orphaned',
 	// Inactive plugin.
 	'option|fixinact_settings'              => 'inactive',
+	'option|external_updates-wpcu-fixture-inactive' => 'inactive', // Slug of the inactive fixture inside the name.
 	// In use by the active fixture.
 	'option|fixact_settings'                => 'in_use',
 	'option|fixact_dyn_one'                 => 'in_use',
@@ -222,6 +239,10 @@ $expect = array(
 	'cron|fixact_cron'                      => 'in_use',
 	'meta|post:_fixact_meta'                => 'in_use',
 	'post_type|fixact_item'                 => 'in_use',
+	'meta|post:_fixcf_hero|slide_image|0|0|value' => 'in_use', // Carbon Fields key: the field is defined in active code.
+	'option|_fixcf_footer|||0|value'        => 'in_use',
+	'option|fixact_settings_3'              => 'in_use',  // Numeric suffix on a referenced name.
+	'option|puc_external_updates_theme-wpcu-fixture-active' => 'in_use', // Update cache named after an active plugin.
 	// Core / protected.
 	'option|siteurl'                        => 'core',
 	'option|cron'                           => 'core',
@@ -232,6 +253,10 @@ $expect = array(
 	'meta|user:rich_editing'                => 'core',
 	'post_type|post'                        => 'core',
 	'file|uploads/2026'                     => 'core',
+	'meta|post:_oembed_' . md5( 'https://example.test/v' ) => 'core',
+	'meta|post:_oembed_time_' . md5( 'https://example.test/v' ) => 'core',
+	'meta|post:_format_url'                 => 'core',
+	'option|plugins_delete_result_1'        => 'core',
 	'file|content/plugins'                  => 'missing', // Never listed at all.
 	'file|content/uploads'                  => 'missing',
 	// Structural.
@@ -244,6 +269,13 @@ foreach ( $expect as $key => $status ) {
 }
 wpcu_assert( 'Yoast SEO' === $by['option|wpseo_titles']['owner'], 'wpseo_titles attributed to Yoast SEO' );
 wpcu_assert( 'WPCU Fixture Inactive' === $by['option|fixinact_settings']['owner'], 'fixinact_settings attributed to the inactive fixture' );
+wpcu_assert( 'WPCU Fixture Active' === $by['meta|post:_fixcf_hero|slide_image|0|0|value']['owner'], 'Carbon Fields key attributed to the code defining the field, not to a prefix-only match elsewhere' );
+wpcu_assert( false !== strpos( $by['meta|post:_zzcf_gone|x|0|0|value']['reason'], 'Carbon Fields' ), 'unmatched Carbon Fields key explains its format' );
+wpcu_assert( 'medium' === $by['option|puc_external_updates_theme-wpcu-fixture-active']['confidence'], 'slug-only evidence has medium confidence' );
+wpcu_assert( 'elementor' === $by['table|' . $p . 'e_events']['owner_slug'] && 'woocommerce' === $by['option|shop_single_image_size']['owner_slug'] && 'jetpack' === $by['option|post_by_email_address4']['owner_slug'], 'verified signatures name Elementor, WooCommerce and Jetpack' );
+$wpcu_sig = WPCleanup\Signatures::match( 'e_events' );
+wpcu_assert( $wpcu_sig && $wpcu_sig['exact'] && null === WPCleanup\Signatures::match( 'e_events_log' ), 'exact signature names match only themselves' );
+wpcu_assert( 'hero' === WPCleanup\Classifier::carbon_field( '_hero||0|_empty' ) && in_array( 'fixact_settings', WPCleanup\Classifier::spellings( 'option', 'fixact_settings_14_2_1' ), true ), 'spellings derive the Carbon Fields field and the unsuffixed base' );
 wpcu_assert( ! empty( $by['option|wpseo_titles']['autoload'] ), 'autoload flag detected' );
 wpcu_assert( 1 === $by['orphan|postmeta']['count'], 'exactly one orphaned postmeta row counted' );
 $expired_def   = WPCleanup\Scanner::orphan_kinds()['expired_transients'];
