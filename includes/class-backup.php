@@ -292,12 +292,23 @@ final class Backup {
 	 *
 	 * @return array<int,array{label:string,ok:bool,message:string}>
 	 */
-	public function restore() {
+	public function restore( $only_item = null ) {
+		if ( null !== $only_item && ( ! is_int( $only_item ) || ! isset( $this->manifest['items'][ $only_item ] ) ) ) {
+			throw new \InvalidArgumentException( __( 'Backup item not found.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+		}
+		$selected = null;
+		if ( null !== $only_item ) {
+			$selected = array( $only_item => true );
+			$partner = isset( $this->manifest['items'][ $only_item ]['extra']['merge_partner'] ) ? (int) $this->manifest['items'][ $only_item ]['extra']['merge_partner'] : -1;
+			if ( isset( $this->manifest['items'][ $partner ] ) ) {
+				$selected[ $partner ] = true;
+			}
+		}
 		$report = array();
 		$tt_ids = array();
 		// Undo newest first: later items may have changed rows an earlier item also changed.
 		foreach ( array_reverse( $this->manifest['items'], true ) as $n => $item ) {
-			if ( 'deleted' !== $item['result'] || ! empty( $item['restored'] ) ) {
+			if ( ( null !== $selected && ! isset( $selected[ $n ] ) ) || 'deleted' !== $item['result'] || ! empty( $item['restored'] ) ) {
 				continue;
 			}
 			try {
@@ -320,7 +331,10 @@ final class Backup {
 		if ( ! $report ) {
 			return $report;
 		}
-		$this->manifest['restored'] = time();
+		$pending = array_filter( $this->manifest['items'], static function ( $item ) {
+			return 'deleted' === $item['result'] && empty( $item['restored'] );
+		} );
+		$this->manifest['restored'] = $pending ? null : time();
 		$this->save();
 		wp_cache_flush();
 		if ( $tt_ids ) {
@@ -398,6 +412,9 @@ final class Backup {
 
 			case 'media_delete':
 				return Media_Remover::restore( $this, $n, $item );
+
+			case 'media_merge_rewrite':
+				return Media_Merger::restore( $this, $n, $item );
 
 			case 'media_file':
 				return Media_Orphan_Files::restore( $this, $n, $item );

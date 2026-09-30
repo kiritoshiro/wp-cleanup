@@ -125,7 +125,7 @@ final class Media_Converter {
 				throw new \RuntimeException( $avif_error ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
 
-			$primary = $jpeg ? $jpeg : $full;
+			$primary = $full ? $full : $jpeg;
 			$primary_name = wp_basename( $primary['path'] );
 			$small_name = $small ? wp_basename( $small['path'] ) : '';
 			$map = array();
@@ -134,14 +134,14 @@ final class Media_Converter {
 			foreach ( $inv['files'] as $name => $file ) {
 				$remove[ $name ] = $file;
 				$target = $primary_name;
-				if ( ! $jpeg && $small_name && in_array( $file['role'], array( 'size', 'stray', 'backup' ), true ) && $file['width'] && $file['height'] && max( $file['width'], $file['height'] ) <= $s['small_max'] ) {
+				if ( $small_name && in_array( $file['role'], array( 'size', 'stray', 'backup' ), true ) && $file['width'] && $file['height'] && max( $file['width'], $file['height'] ) <= $s['small_max'] ) {
 					$target = $small_name;
 				}
 				$map[ Reference_Rewriter::key( $inv['rel_dir'], $name ) ] = Reference_Rewriter::key( $inv['rel_dir'], $target );
 				$needles[ Reference_Rewriter::key( $inv['rel_dir'], Media_Inventory::base_name( $name ) ) ] = true;
 			}
 			$widths = array( Reference_Rewriter::key( $inv['rel_dir'], $primary_name ) => $primary['width'] );
-			if ( ! $jpeg && $small ) {
+			if ( $small ) {
 				$widths[ Reference_Rewriter::key( $inv['rel_dir'], $small_name ) ] = $small['width'];
 			}
 			$rewriter = new Reference_Rewriter( $map, $widths );
@@ -505,8 +505,8 @@ final class Media_Converter {
 
 	private static function update_attachment( $id, array $inv, $jpeg, $full, $small, $rotated, array $s, $avif_error ) {
 		global $wpdb;
-		$primary = $jpeg ? $jpeg : $full;
-		$mime = $jpeg ? 'image/jpeg' : 'image/avif';
+		$primary = $full ? $full : $jpeg;
+		$mime = $full ? 'image/avif' : 'image/jpeg';
 		$meta = $inv['meta'];
 		// Compute the path ourselves because Windows path separators differ from WordPress strings.
 		$relative = self::rel( $primary['path'] );
@@ -515,7 +515,7 @@ final class Media_Converter {
 		$meta['height'] = $primary['height'];
 		$meta['filesize'] = (int) filesize( $primary['path'] );
 		$meta['sizes'] = array();
-		if ( ! $jpeg && $small ) {
+		if ( $small ) {
 			$meta['sizes'][ $s['small_name'] ] = array(
 				'file' => wp_basename( $small['path'] ),
 				'width' => $small['width'],
@@ -529,7 +529,8 @@ final class Media_Converter {
 			$meta['image_meta']['orientation'] = 1;
 		}
 		$outputs = array(
-			'jpeg' => $jpeg ? $relative : '',
+			'jpeg' => $jpeg ? self::rel( $jpeg['path'] ) : '',
+			'jpeg_width' => $jpeg ? $jpeg['width'] : 0,
 			'avif_full' => $full ? self::rel( $full['path'] ) : '',
 			'avif_full_width' => $full ? $full['width'] : 0,
 			'avif_full_height' => $full ? $full['height'] : 0,

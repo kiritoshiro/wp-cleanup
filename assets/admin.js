@@ -95,7 +95,27 @@
 		var status = media.querySelector( '.wpcu-media-status' );
 		var stopButton = media.querySelector( '.wpcu-media-stop' );
 		var runButtons = media.querySelectorAll( '.wpcu-media-run' );
+		var initiallyDisabled = Array.prototype.map.call( runButtons, function ( button ) { return button.disabled; } );
 		var stopRequested = false;
+		var policyForm = document.querySelector( '.wpcu-policy-form' );
+		var policyDirty = false;
+		if ( policyForm ) {
+			var policyValues = function () {
+				return Array.prototype.map.call( policyForm.querySelectorAll( 'input[name]' ), function ( input ) {
+					return input.name + ':' + ( input.type === 'checkbox' ? String( input.checked ) : input.value );
+				} ).join( '|' );
+			};
+			var originalPolicy = policyValues();
+			var checkPolicy = function () {
+				policyDirty = policyValues() !== originalPolicy;
+				Array.prototype.forEach.call( runButtons, function ( button, index ) {
+					button.disabled = initiallyDisabled[ index ] || policyDirty;
+				} );
+				if ( policyDirty ) { status.textContent = wpCleanup.mediaPolicyUnsaved; }
+			};
+			policyForm.addEventListener( 'input', checkPolicy );
+			policyForm.addEventListener( 'change', checkPolicy );
+		}
 
 		var mUsage = media.querySelector( '.wpcu-filter-usage' );
 		var mApply = function () {
@@ -128,8 +148,8 @@
 		} );
 
 		var setBusy = function ( busy ) {
-			Array.prototype.forEach.call( runButtons, function ( b ) {
-				b.disabled = busy;
+			Array.prototype.forEach.call( runButtons, function ( b, index ) {
+				b.disabled = busy || policyDirty || initiallyDisabled[ index ];
 			} );
 			stopButton.hidden = ! busy;
 			progress.hidden = false;
@@ -139,6 +159,7 @@
 			var body = new URLSearchParams();
 			body.append( 'action', 'wpcu_media_batch' );
 			body.append( '_ajax_nonce', wpCleanup.mediaNonce );
+			body.append( 'policy', wpCleanup.mediaPolicyHash );
 			body.append( 'backup', backup || '' );
 			ids.forEach( function ( id ) {
 				body.append( 'ids[]', id );
@@ -188,6 +209,7 @@
 
 		Array.prototype.forEach.call( runButtons, function ( button ) {
 			button.addEventListener( 'click', function () {
+				if ( policyDirty ) { status.textContent = wpCleanup.mediaPolicyUnsaved; return; }
 				var ids = mRows.filter( function ( row ) {
 					var box = row.querySelector( 'input[type=checkbox]' );
 					return ! box.disabled && ( 'all' === button.getAttribute( 'data-scope' ) || box.checked );
@@ -270,6 +292,21 @@
 		stopButton.addEventListener( 'click', function () {
 			stopRequested = true;
 			stopButton.disabled = true;
+		} );
+	}
+
+	var mergeForm = document.getElementById( 'wpcu-merge-form' );
+	if ( mergeForm ) {
+		Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-merge-image' ), function ( button ) {
+			button.addEventListener( 'click', function () {
+				var drop = button.getAttribute( 'data-drop' );
+				var keeper = button.parentNode.querySelector( '.wpcu-merge-keeper' );
+				if ( ! keeper || ! keeper.value ) { return; }
+				if ( ! window.confirm( wpCleanup.confirmMerge.replace( '%1$d', drop ).replace( '%2$d', keeper.value ) ) ) { return; }
+				mergeForm.querySelector( '[name="drop"]' ).value = drop;
+				mergeForm.querySelector( '[name="keep"]' ).value = keeper.value;
+				mergeForm.submit();
+			} );
 		} );
 	}
 

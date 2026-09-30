@@ -236,17 +236,17 @@ foreach ( array( $big, $png, $small, $twin_j, $twin_p, $avif_input ) as $id ) {
 	wpcu_ok( 'converted' === $results[ $id ]['status'], "#$id converted: " . $results[ $id ]['message'] );
 }
 wpcu_ok( 'skipped' === $results[ $gif ]['status'], 'GIF skipped: ' . $results[ $gif ]['message'] );
-wpcu_ok( 'image/jpeg' === get_post_mime_type( $avif_input ) && in_array( $subdir . '/wpcut-input.avif', $results[ $avif_input ]['backed_up'], true ), 'AVIF-only source gets one JPEG fallback and its old AVIF is backed up' );
+wpcu_ok( 'image/avif' === get_post_mime_type( $avif_input ) && in_array( $subdir . '/wpcut-input.avif', $results[ $avif_input ]['backed_up'], true ), 'AVIF-only source stays AVIF primary, gains one JPEG fallback, and backs up its old AVIF' );
 
 $m = wp_get_attachment_metadata( $big );
 $outputs = get_post_meta( $big, Media_Policy::OUTPUT_META, true );
-wpcu_ok( 'image/jpeg' === get_post_mime_type( $big ) && '.jpg' === substr( get_attached_file( $big ), -4 ), 'big has one JPEG fallback attachment' );
+wpcu_ok( 'image/avif' === get_post_mime_type( $big ) && '.avif' === substr( get_attached_file( $big ), -5 ), 'big keeps AVIF as the main attachment' );
 $stored = get_post_meta( $big, '_wp_attached_file', true );
-wpcu_ok( $subdir . '/wpcut-big-fallback.jpg' === $stored && is_file( get_attached_file( $big ) ), "stored path is uploads-relative and resolves (got $stored)" );
-wpcu_ok( $stored === $m['file'] && $stored === $outputs['jpeg'], 'metadata and output policy name the one JPEG fallback' );
-wpcu_ok( wp_get_attachment_url( $big ) === $u( 'wpcut-big-fallback.jpg' ), 'direct attachment URL uses compatible JPEG' );
-wpcu_ok( 1920 === $m['width'] && 1280 === $m['height'], 'JPEG capped at 1920 (got ' . $m['width'] . 'x' . $m['height'] . ')' );
-wpcu_ok( array() === $m['sizes'], 'no JPEG sub-sizes created' );
+wpcu_ok( $subdir . '/wpcut-big.avif' === $stored && is_file( get_attached_file( $big ) ), "stored path is uploads-relative and resolves (got $stored)" );
+wpcu_ok( $stored === $m['file'] && $stored === $outputs['avif_full'] && $subdir . '/wpcut-big-fallback.jpg' === $outputs['jpeg'], 'metadata names AVIF main and policy names the separate JPEG fallback' );
+wpcu_ok( wp_get_attachment_url( $big ) === $u( 'wpcut-big.avif' ), 'direct attachment URL uses primary AVIF' );
+wpcu_ok( 1920 === $m['width'] && 1280 === $m['height'], 'AVIF capped at 1920 (got ' . $m['width'] . 'x' . $m['height'] . ')' );
+wpcu_ok( isset( $m['sizes']['alps-small'] ) && 'image/avif' === $m['sizes']['alps-small']['mime-type'], 'only the small AVIF is registered as a size' );
 wpcu_ok( ! isset( $m['original_image'] ) && '1' === (string) get_post_meta( $big, Media_Policy::ALPS_FLAG, true ), 'original_image dropped, ALPS flag set' );
 $left = array_values( array_filter( glob( $dir . '/wpcut-big*' ), 'is_file' ) );
 wpcu_ok( 3 === count( $left ) && 1 === count( preg_grep( '/\.jpe?g$/', $left ) ), 'exactly one JPEG plus two AVIF files for big: ' . implode( ', ', array_map( 'basename', $left ) ) );
@@ -254,7 +254,7 @@ wpcu_ok( $subdir . '/wpcut-big.avif' === $outputs['avif_full'] && $subdir . '/wp
 wpcu_ok( in_array( $subdir . '/wpcut-big.jpg', $results[ $big ]['backed_up'], true ) && in_array( $subdir . '/wpcut-big-scaled.jpg', $results[ $big ]['backed_up'], true ), 'old original and scaled image were moved into the backup set' );
 $reference_details = $results[ $big ]['reference_changes'];
 wpcu_ok( 'revision' === get_post_type( $revision ) && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'Revision #' ) && false !== strpos( $change['where'], 'Image host' ); } ) ) > 0 && false !== strpos( $results[ $big ]['message'], 'in revisions). These are database records, not separate image uses.' ), 'revisions are rewritten but explicitly labeled and excluded from image-use counts' );
-wpcu_ok( $reference_details && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'post_content' ) && false !== strpos( $change['from'], 'wpcut-big-1024x683.jpg' ) && false !== strpos( $change['to'], '-fallback.jpg' ); } ) ) > 0, 'reference details show location, old path and JPEG path' );
+wpcu_ok( $reference_details && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'post_content' ) && false !== strpos( $change['from'], 'wpcut-big-1024x683.jpg' ) && false !== strpos( $change['to'], '.avif' ); } ) ) > 0, 'reference details show location, old path and AVIF path' );
 $stored_backup = Backup::open( $backup->id );
 wpcu_ok( ! empty( $stored_backup->manifest['items'][0]['extra']['reference_changes'] ) && ! empty( $stored_backup->manifest['items'][0]['extra']['moved'] ), 'reference changes and original file paths remain available in the backup manifest' );
 $with_backups = Media_Files::catalog( Media_Files::all_ids() );
@@ -264,16 +264,16 @@ $backup_view->setAccessible( true );
 ob_start();
 $backup_view->invoke( new WPCleanup\Admin() );
 $backup_html = ob_get_clean();
-wpcu_ok( false !== strpos( $backup_html, 'stored path entries (including revisions)' ) && false !== strpos( $backup_html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $backup_html, 'wpcut-big-fallback.jpg' ), 'Backups tab exposes expandable three-line reference details' );
+wpcu_ok( false !== strpos( $backup_html, 'stored path entries (including revisions)' ) && false !== strpos( $backup_html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $backup_html, 'wpcut-big.avif' ) && false !== strpos( $backup_html, 'Restore this image only' ) && false !== strpos( $backup_html, 'Download original' ), 'Backups tab exposes per-image restore, original downloads and reference details' );
 
 $ms = wp_get_attachment_metadata( $small );
-wpcu_ok( array() === $ms['sizes'] && 500 === $ms['width'], 'small image: one JPEG, no extra JPEG size' );
+wpcu_ok( array() === $ms['sizes'] && 500 === $ms['width'], 'small image: AVIF primary, no generated sub-size' );
 $small_outputs = get_post_meta( $small, Media_Policy::OUTPUT_META, true );
 wpcu_ok( ! empty( $small_outputs['avif_full'] ) && empty( $small_outputs['avif_small'] ), 'small image has one AVIF alternative' );
 $src = wp_get_attachment_image_src( $big, 'alps-small' );
-wpcu_ok( $src && false !== strpos( $src[0], '-fallback.jpg' ), 'image URL remains JPEG for older devices' );
+wpcu_ok( $src && false !== strpos( $src[0], '-768x512.avif' ), 'named small image uses AVIF' );
 $picture = wp_get_attachment_image( $big, 'full' );
-wpcu_ok( false !== strpos( $picture, '<picture><source type="image/avif"' ) && false !== strpos( $picture, 'wpcut-big.avif' ) && false !== strpos( $picture, 'wpcut-big-fallback.jpg' ), 'WordPress image markup offers AVIF and one JPEG fallback' );
+wpcu_ok( false !== strpos( $picture, '<picture><source type="image/avif"' ) && false !== strpos( $picture, 'wpcut-big.avif' ) && false !== strpos( $picture, 'src="' . $u( 'wpcut-big-fallback.jpg' ) . '"' ) && false === strpos( $picture, 'src="' . $u( 'wpcut-big.avif' ) . '"' ), 'picture serves AVIF source and JPEG img fallback' );
 $small_picture = wp_get_attachment_image( $big, 'alps-small' );
 wpcu_ok( false !== strpos( $small_picture, 'sizes="(max-width: 768px) 100vw, 768px"' ), 'small image request selects the small AVIF width' );
 wpcu_ok( is_file( $dir . '/wpcut-anim.gif' ) && 'image/gif' === get_post_mime_type( $gif ), 'GIF file untouched' );
@@ -285,7 +285,7 @@ $img = imagecreatefromavif( $up['basedir'] . '/' . $png_outputs['avif_full'] );
 $a   = ( imagecolorat( $img, 5, 5 ) >> 24 ) & 0x7F;
 $c   = ( imagecolorat( $img, (int) ( $pm['width'] / 2 ), (int) ( $pm['height'] / 2 ) ) >> 24 ) & 0x7F;
 wpcu_ok( $a > 100 && $c < 20, "PNG alpha kept (corner alpha $a, centre alpha $c)" );
-$fallback_img = imagecreatefromjpeg( get_attached_file( $png ) );
+$fallback_img = imagecreatefromjpeg( $up['basedir'] . '/' . $png_outputs['jpeg'] );
 $corner = imagecolorsforindex( $fallback_img, imagecolorat( $fallback_img, 5, 5 ) );
 wpcu_ok( $corner['red'] > 230 && $corner['green'] > 230 && $corner['blue'] > 230, 'transparent PNG is flattened onto white in its JPEG fallback' );
 imagedestroy( $fallback_img );
@@ -294,14 +294,14 @@ imagedestroy( $fallback_img );
 $html = get_post_field( 'post_content', $post, 'raw' );
 $full = wp_basename( get_attached_file( $big ) );
 $sm   = $full;
-wpcu_ok( false === strpos( $html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $html, $escaped( $u( $full ) ) ) && false !== strpos( $html, '<img src="' . $u( $full ) . '"' ), 'large size (plain and JSON-escaped) → JPEG fallback' );
-wpcu_ok( false !== strpos( $html, 'srcset="' . $u( $sm ) . ' 1920w"' ), 'srcset 300w/768w → one JPEG entry at its real width' );
-wpcu_ok( false !== strpos( $html, 'href="' . $u( $full ) . '"' ), 'link to the original → JPEG fallback' );
-wpcu_ok( false !== strpos( $html, '<img src="' . $u( $full ) . '"></p>' ) && false === strpos( $html, '999x666' ), 'stray 999x666 → JPEG fallback' );
-wpcu_ok( false !== strpos( $html, wp_make_link_relative( $u( wp_basename( get_attached_file( $png ) ) ) ) ), 'relative URL rewritten' );
+wpcu_ok( false === strpos( $html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $html, $escaped( $u( $full ) ) ) && false !== strpos( $html, '<img src="' . $u( $full ) . '"' ), 'large size (plain and JSON-escaped) → AVIF main' );
+wpcu_ok( false !== strpos( $html, 'srcset="' . $u( wp_basename( $outputs['avif_small'] ) ) . ' 768w"' ), 'srcset candidates use the small AVIF at its real width' );
+wpcu_ok( false !== strpos( $html, 'href="' . $u( $full ) . '"' ), 'link to the original → AVIF main' );
+wpcu_ok( false !== strpos( $html, '<img src="' . $u( $full ) . '"></p>' ) && false === strpos( $html, '999x666' ), 'stray 999x666 → AVIF main' );
+wpcu_ok( false !== strpos( $html, wp_make_link_relative( $u( wp_basename( $png_outputs['avif_small'] ) ) ) ), 'relative URL rewritten' );
 wpcu_ok( false !== strpos( $html, 'wpcut-big-300x200.jpg.bak and not-wpcut-big.jpg' ), 'look-alike text untouched' );
 $g = get_post_meta( $post, 'wpcut_gallery', true );
-wpcu_ok( is_array( $g ) && false === strpos( $g['items'][0]['thumb'], 'wpcut-twin-150x150.png' ) && false !== strpos( $g['items'][0]['thumb'], '.jpg' ) && false !== strpos( unserialize( $g['nested'] )['u'], '-fallback.jpg' ), 'serialized and nested-serialized meta rewritten and still valid' );
+wpcu_ok( is_array( $g ) && false === strpos( $g['items'][0]['thumb'], 'wpcut-twin-150x150.png' ) && false !== strpos( $g['items'][0]['thumb'], '.avif' ) && false !== strpos( unserialize( $g['nested'] )['u'], '.avif' ), 'serialized and nested-serialized meta rewritten and still valid' );
 wpcu_ok( false !== strpos( get_option( 'wpcut_json' ), $escaped( $u( $full ) ) ), 'JSON option rewritten' );
 $dead = array();
 foreach ( array_keys( $before_files ) as $name ) {
@@ -367,6 +367,20 @@ wp_cache_flush();
 wpcu_ok( $before_files === $files_snapshot(), 'restore: every original file back byte-identical, new files gone from uploads' );
 wpcu_ok( $before_db == $db_snapshot(), 'restore: attachments, content, meta and options identical' ); // phpcs:ignore
 wpcu_ok( (bool) glob( $backup->dir . '/files/*/created/' . $up['subdir'] . '/wpcut-big*.avif' ), 'unused AVIFs parked in the backup set, not deleted' );
+
+/* Restoring one item leaves the other conversion and its backup intact. */
+$batch_a = wpcu_attach( 'wpcut-batch-a.jpg', 850, 620, 'jpg' );
+$batch_b = wpcu_attach( 'wpcut-batch-b.jpg', 860, 630, 'jpg' );
+$batch_files = $files_snapshot();
+$batch_backup = Backup::start();
+$batch_a_result = Media_Converter::convert( $batch_a, $batch_backup );
+$batch_b_result = Media_Converter::convert( $batch_b, $batch_backup );
+wpcu_ok( 'converted' === $batch_a_result['status'] && 'converted' === $batch_b_result['status'], 'two attachments converted into one backup set' );
+$one_restored = Backup::open( $batch_backup->id )->restore( 0 );
+$batch_state = Backup::open( $batch_backup->id )->manifest;
+wpcu_ok( 1 === count( $one_restored ) && $one_restored[0]['ok'] && 'image/jpeg' === get_post_mime_type( $batch_a ) && 'image/avif' === get_post_mime_type( $batch_b ) && ! empty( $batch_state['items'][0]['restored'] ) && empty( $batch_state['items'][1]['restored'] ) && empty( $batch_state['restored'] ), 'one image restores without reverting its batchmate' );
+$rest_restored = Backup::open( $batch_backup->id )->restore();
+wpcu_ok( 1 === count( $rest_restored ) && $rest_restored[0]['ok'] && 'image/jpeg' === get_post_mime_type( $batch_b ) && $batch_files === $files_snapshot(), 'remaining image can be restored later from the same set' );
 
 /* If the first image editor cannot write AVIF, GD retries before using JPEG alone. */
 class WPCU_Failing_Avif_Editor extends WP_Image_Editor_GD {
@@ -435,7 +449,7 @@ wpcu_ok( 'converted' === $r['status'], 'converted again' );
 wp_update_post( wp_slash( array( 'ID' => $post, 'post_content' => get_post_field( 'post_content', $post, 'raw' ) . '<p>edited later</p>' ) ) );
 $res = Backup::open( $b2->id )->restore();
 wpcu_ok( 1 === count( $res ) && ! $res[0]['ok'] && false !== strpos( $res[0]['message'], 'edited' ), 'restore refused after a later edit: ' . $res[0]['message'] );
-wpcu_ok( 'image/jpeg' === get_post_mime_type( $big ) && false !== strpos( get_post_field( 'post_content', $post, 'raw' ), 'edited later' ), 'nothing changed by the refused restore' );
+wpcu_ok( 'image/avif' === get_post_mime_type( $big ) && false !== strpos( get_post_field( 'post_content', $post, 'raw' ), 'edited later' ), 'nothing changed by the refused restore' );
 
 /* ---------------------------------------------------------------------- */
 /* 6. Idempotence                                                         */
@@ -444,6 +458,35 @@ wpcu_ok( 'image/jpeg' === get_post_mime_type( $big ) && false !== strpos( get_po
 WP_CLI::log( "\n6. Idempotence" );
 $r = Media_Converter::convert( $big, $b2 );
 wpcu_ok( 'compliant' === $r['status'], 'already converted image reports compliant: ' . $r['message'] );
+
+/* ---------------------------------------------------------------------- */
+/* 7. Merge two used look-alike attachments and restore the one operation  */
+/* ---------------------------------------------------------------------- */
+
+$merge_old = wpcu_attach( 'wpcut-merge-old.jpg', 800, 600, 'jpg' );
+$merge_keep = wpcu_attach( 'wpcut-merge-keep.png', 800, 600, 'png' );
+$merge_url = wp_get_attachment_url( $merge_old );
+$keep_url = wp_get_attachment_url( $merge_keep );
+$merge_html = '<!-- wp:image {"id":' . $merge_old . '} --><img class="wp-image-' . $merge_old . '" src="' . $merge_url . '"><!-- /wp:image -->[gallery ids="' . $merge_old . '" columns="' . $merge_old . '"]';
+$merge_post = wp_insert_post( wp_slash( array( 'post_title' => 'Merge fixture', 'post_status' => 'publish', 'post_content' => $merge_html ) ) );
+update_post_meta( $merge_post, '_wpcu_test', 1 );
+set_post_thumbnail( $merge_post, $merge_keep );
+$merge_featured = wp_insert_post( array( 'post_title' => 'Merged featured fixture', 'post_status' => 'publish' ) );
+update_post_meta( $merge_featured, '_wpcu_test', 1 );
+set_post_thumbnail( $merge_featured, $merge_old );
+update_post_meta( $merge_post, 'hero_image', $merge_old );
+$merge_backup = Backup::start();
+try {
+	$merge_id = \WPCleanup\Media_Merger::merge( $merge_old, $merge_keep, $merge_backup );
+	$merge_current = get_post_field( 'post_content', $merge_post, 'raw' );
+	wpcu_ok( $merge_id === $merge_backup->id && ! get_post( $merge_old ) && false !== strpos( $merge_current, 'wp-image-' . $merge_keep ) && false !== strpos( $merge_current, '"id":' . $merge_keep ) && false !== strpos( $merge_current, $keep_url ) && false !== strpos( $merge_current, 'ids="' . $merge_keep . '" columns="' . $merge_old . '"' ) && (string) $merge_keep === get_post_meta( $merge_post, 'hero_image', true ) && (int) get_post_thumbnail_id( $merge_post ) === $merge_keep && (int) get_post_thumbnail_id( $merge_featured ) === $merge_keep, 'used look-alike merged into keeper across URL, editor IDs and image field' );
+	$merge_items = Backup::open( $merge_id )->manifest['items'];
+	wpcu_ok( 2 === count( $merge_items ) && 'media_merge_rewrite' === $merge_items[0]['type'] && 'media_delete' === $merge_items[1]['type'], 'merge backs up references and redundant image together' );
+	$merge_restored = Backup::open( $merge_id )->restore( 1 );
+	wpcu_ok( 2 === count( $merge_restored ) && $merge_restored[0]['ok'] && $merge_restored[1]['ok'] && get_post( $merge_old ) && $merge_html === get_post_field( 'post_content', $merge_post, 'raw' ) && (string) $merge_old === get_post_meta( $merge_post, 'hero_image', true ) && (int) get_post_thumbnail_id( $merge_featured ) === $merge_old, 'single merge restore brings back image and original references' );
+} catch ( \Exception $e ) {
+	wpcu_ok( false, 'used look-alike merge: ' . $e->getMessage() );
+}
 
 /* ---------------------------------------------------------------------- */
 /* Teardown: leave the site as we found it for other suites               */

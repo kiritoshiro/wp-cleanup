@@ -64,6 +64,9 @@ final class Media_Inventory {
 		}
 		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
 		if ( is_array( $outputs ) ) {
+			if ( ! empty( $outputs['jpeg'] ) ) {
+				$add( $outputs['jpeg'], 'jpeg_fallback' );
+			}
 			foreach ( array( 'avif_full', 'avif_small' ) as $variant ) {
 				if ( ! empty( $outputs[ $variant ] ) ) {
 					$add( $outputs[ $variant ], $variant );
@@ -132,14 +135,28 @@ final class Media_Inventory {
 		$s = Media_Policy::settings();
 		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
 		if ( $s['jpeg_fallback'] && is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
-			if ( 'image/jpeg' !== get_post_mime_type( $id ) || ! empty( $meta['original_image'] ) || ! empty( $meta['sizes'] ) || ( ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) ) ) {
+			if ( ! empty( $meta['original_image'] ) || ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) || $outputs['policy'] != $s ) { // phpcs:ignore -- compare policy arrays.
 				return false;
 			}
-			if ( $outputs['policy'] != $s || (string) $outputs['jpeg'] !== (string) $meta['file'] ) { // phpcs:ignore -- compare policy arrays.
+			$has_avif = ! empty( $outputs['avif_full'] );
+			$avif_main = $has_avif && 'image/avif' === get_post_mime_type( $id ) && (string) $meta['file'] === (string) $outputs['avif_full'];
+			$jpeg_main = 'image/jpeg' === get_post_mime_type( $id ) && (string) $meta['file'] === (string) $outputs['jpeg'];
+			if ( ! $avif_main && ! $jpeg_main ) {
 				return false;
 			}
-			if ( ! isset( $files[ wp_basename( $outputs['jpeg'] ) ] ) || max( (int) $meta['width'], (int) $meta['height'] ) > $s['jpeg_max'] ) {
+			if ( ! isset( $files[ wp_basename( $outputs['jpeg'] ) ] ) || ( $has_avif && ! isset( $files[ wp_basename( $outputs['avif_full'] ) ] ) ) ) {
 				return false;
+			}
+			if ( $jpeg_main && ( ! empty( $meta['sizes'] ) || max( (int) $meta['width'], (int) $meta['height'] ) > $s['jpeg_max'] ) ) {
+				return false;
+			}
+			if ( $avif_main ) {
+				if ( max( (int) $meta['width'], (int) $meta['height'] ) > $s['full_max'] || array_diff( array_keys( (array) ( isset( $meta['sizes'] ) ? $meta['sizes'] : array() ) ), array( $s['small_name'] ) ) ) {
+					return false;
+				}
+				if ( ! empty( $outputs['avif_small'] ) && ( ! isset( $meta['sizes'][ $s['small_name'] ]['file'] ) || wp_basename( $outputs['avif_small'] ) !== $meta['sizes'][ $s['small_name'] ]['file'] ) ) {
+					return false;
+				}
 			}
 			foreach ( array( 'avif_full', 'avif_small' ) as $variant ) {
 				if ( ! empty( $outputs[ $variant ] ) && ! isset( $files[ wp_basename( $outputs[ $variant ] ) ] ) ) {
@@ -147,7 +164,7 @@ final class Media_Inventory {
 				}
 			}
 			foreach ( $files as $file ) {
-				if ( ! in_array( $file['role'], array( 'attached', 'avif_full', 'avif_small' ), true ) ) {
+				if ( ! in_array( $file['role'], array( 'attached', 'size', 'jpeg_fallback', 'avif_full', 'avif_small' ), true ) ) {
 					return false;
 				}
 			}

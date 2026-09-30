@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       WP Cleanup
- * Description:       Finds data left behind by removed plugins and themes (options, tables, cron events, meta, post types, transients, folders), explains who owns it, and removes it with a restorable backup. Also slims images to optional JPEG fallback with AVIF alternatives.
+ * Description:       Finds data left behind by removed plugins and themes (options, tables, cron events, meta, post types, transients, folders), explains who owns it, and removes it with a restorable backup. Also slims images to AVIF images with an optional JPEG fallback.
  * Version:           0.6.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
