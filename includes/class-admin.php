@@ -59,7 +59,7 @@ final class Admin {
 				'mediaLocation' => __( 'Location', 'wp-cleanup' ),
 				'mediaOriginal' => __( 'Original', 'wp-cleanup' ),
 				'mediaNew' => __( 'New', 'wp-cleanup' ),
-				'mediaReferences' => __( '%d reference path changes', 'wp-cleanup' ),
+				'mediaReferences' => __( '%d stored path entries (including revisions)', 'wp-cleanup' ),
 				'mediaOriginals' => __( '%d original files moved to backup', 'wp-cleanup' ),
 				'mediaStopped'   => __( 'Stopped.', 'wp-cleanup' ),
 				'mediaConfirmBox' => __( 'Please tick the backup confirmation first.', 'wp-cleanup' ),
@@ -937,7 +937,7 @@ final class Admin {
 			$html .= '<span class="wpcu-badge wpcu-unused">' . esc_html__( 'Not used', 'wp-cleanup' ) . '</span>';
 		} else {
 			/* translators: %d: number of places */
-			$html .= '<details class="wpcu-uses"><summary>' . esc_html( sprintf( _n( 'Used in %d place', 'Used in %d places', $count, 'wp-cleanup' ), $count ) ) . '</summary><ul>';
+			$html .= '<details class="wpcu-uses"><summary>' . esc_html( sprintf( _n( 'Referenced in %d current location', 'Referenced in %d current locations', $count, 'wp-cleanup' ), $count ) ) . '</summary><ul>';
 			foreach ( $uses as $use ) {
 				$html .= '<li>' . self::use_label( $use ) . '</li>';
 			}
@@ -1145,7 +1145,7 @@ final class Admin {
 					echo '</ul></details>';
 				}
 				if ( ! empty( $extra['reference_changes'] ) ) {
-					echo '<details><summary>' . esc_html( sprintf( __( '%d reference path changes', 'wp-cleanup' ), count( $extra['reference_changes'] ) ) ) . '</summary><ul>';
+					echo '<details><summary>' . esc_html( sprintf( __( '%d stored path entries (including revisions)', 'wp-cleanup' ), count( $extra['reference_changes'] ) ) ) . '</summary><ul>';
 					foreach ( $extra['reference_changes'] as $change ) {
 						echo '<li class="wpcu-reference-change">';
 						echo '<div><strong>' . esc_html__( 'Location', 'wp-cleanup' ) . ':</strong> ' . esc_html( $change['where'] ) . '</div>';
