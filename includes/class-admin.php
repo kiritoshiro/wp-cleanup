@@ -592,6 +592,7 @@ final class Admin {
 			if ( $removed ) {
 				Media_Report::forget_removed( wp_list_pluck( $deleted, 'id' ) );
 			}
+			// nosemgrep: php.lang.security.injection.tainted-sql-string.tainted-sql-string -- This is a plain-text transient notice, never a SQL query.
 			$this->notice( $removed === count( $ids ) ? 'success' : 'warning', sprintf( __( 'Removed %1$d of %2$d images. Backup set: %3$s. Rescan a section or check the full library to update the report.', 'wp-cleanup' ), $removed, count( $ids ), $backup->id ), $details );
 		} catch ( \Exception $e ) {
 			$this->notice( 'error', $e->getMessage() );
