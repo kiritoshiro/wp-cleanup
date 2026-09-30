@@ -92,6 +92,7 @@ final class Media_Report {
 
 		if ( null === $limit && $details ) {
 			$report = array_merge( $report, self::usage_and_likeness( $all, $start ) );
+			$report['file_catalog'] = Media_Files::catalog( $all );
 		}
 		$report['duration'] = round( microtime( true ) - $start, 2 );
 		return $report;
@@ -321,8 +322,20 @@ final class Media_Report {
 		$known = isset( $report['usage_checked_ids'] ) ? $report['usage_checked_ids'] : array_map( 'intval', array_keys( isset( $report['info'] ) ? $report['info'] : array() ) );
 		$report['duplicate_unused'] = self::duplicate_unused( $groups, isset( $report['use_counts'] ) ? $report['use_counts'] : array(), $known );
 		$report['total'] = max( 0, (int) $report['total'] - count( $drop ) );
+		if ( isset( $report['file_catalog']['library'] ) ) {
+			$report['file_catalog']['library'] = array_values( array_filter( $report['file_catalog']['library'], static function ( $item ) use ( $drop ) { return ! isset( $drop[ (int) $item['id'] ] ); } ) );
+		}
 		$report['inventory_stale'] = true;
 		Storage::write_json( self::FILE, $report );
+	}
+
+	/** Mark the file snapshot stale after a file-only backup action. */
+	public static function mark_inventory_stale() {
+		$report = self::last();
+		if ( $report ) {
+			$report['inventory_stale'] = true;
+			Storage::write_json( self::FILE, $report );
+		}
 	}
 
 	/**
@@ -336,6 +349,7 @@ final class Media_Report {
 			return;
 		}
 		$drop          = array_flip( array_map( 'intval', $ids ) );
+		$last['inventory_stale'] = true;
 		$last['items'] = array_values(
 			array_filter(
 				$last['items'],

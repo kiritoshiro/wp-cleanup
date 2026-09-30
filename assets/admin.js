@@ -329,6 +329,24 @@
 		} );
 	} );
 
+	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-orphan-form' ), function ( form ) {
+		var count = form.querySelector( '.wpcu-selection-count' );
+		var selected = function () { return new window.FormData( form ).getAll( 'paths[]' ).length; };
+		var update = function () { count.textContent = selected() + ' / 20'; };
+		form.addEventListener( 'change', update );
+		window.addEventListener( 'pageshow', update );
+		update();
+		form.addEventListener( 'submit', function ( event ) {
+			var n = selected();
+			if ( n < 1 || n > 20 ) {
+				event.preventDefault();
+				window.alert( wpCleanup.nothing + ' (1–20)' );
+			} else if ( ! window.confirm( wpCleanup.confirmServerFiles.replace( '%d', n ) ) ) {
+				event.preventDefault();
+			}
+		} );
+	} );
+
 	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-sortable' ), function ( table ) {
 		var body = table.tBodies[ 0 ];
 		Array.prototype.forEach.call( table.querySelectorAll( 'th[data-sort-type]' ), function ( heading ) {

@@ -20,7 +20,7 @@ final class Media_Delivery {
 			return $html;
 		}
 		$outputs = get_post_meta( (int) $id, Media_Policy::OUTPUT_META, true );
-		if ( ! is_array( $outputs ) || empty( $outputs['avif_full'] ) || empty( $outputs['avif_full_width'] ) ) {
+		if ( ! is_array( $outputs ) || empty( $outputs['jpeg'] ) || empty( $outputs['avif_full'] ) || empty( $outputs['avif_full_width'] ) ) {
 			return $html;
 		}
 		$uploads = wp_upload_dir( null, false );

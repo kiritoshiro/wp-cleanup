@@ -12,6 +12,8 @@
 use WPCleanup\Backup;
 use WPCleanup\Media_Converter;
 use WPCleanup\Media_Inventory;
+use WPCleanup\Media_Files;
+use WPCleanup\Media_Orphan_Files;
 use WPCleanup\Media_Policy;
 use WPCleanup\Media_Report;
 
@@ -105,6 +107,9 @@ function wpcu_make_image( $path, $w, $h, $type, $alpha = false ) {
 		case 'png':
 			imagepng( $im, $path );
 			break;
+		case 'avif':
+			imageavif( $im, $path, 65 );
+			break;
 		case 'gif':
 			imagegif( $im, $path );
 			break;
@@ -115,7 +120,7 @@ function wpcu_make_image( $path, $w, $h, $type, $alpha = false ) {
 function wpcu_attach( $name, $w, $h, $type, $alpha = false ) {
 	$path = wp_upload_dir()['path'] . '/' . $name;
 	wpcu_make_image( $path, $w, $h, $type, $alpha );
-	$mime = array( 'jpg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif' )[ $type ];
+	$mime = array( 'jpg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'avif' => 'image/avif' )[ $type ];
 	$id   = wp_insert_attachment( array( 'post_mime_type' => $mime, 'post_title' => $name, 'post_status' => 'inherit' ), $path );
 	wp_update_attachment_metadata( $id, wp_generate_attachment_metadata( $id, $path ) );
 	update_post_meta( $id, '_wpcu_test', 1 );
@@ -131,7 +136,10 @@ $twin_j = wpcu_attach( 'wpcut-twin.jpg', 1600, 1000, 'jpg' );         // Same ba
 $twin_p = wpcu_attach( 'wpcut-twin.png', 1000, 1600, 'png' );
 $obj    = wpcu_attach( 'wpcut-object.jpg', 1000, 700, 'jpg' );        // Referenced inside a PHP object.
 $fail   = wpcu_attach( 'wpcut-fail.jpg', 1400, 900, 'jpg' );          // Move failure is injected.
-$avif_fail = wpcu_attach( 'wpcut-avif-fail.png', 900, 600, 'png' ); // AVIF decode failure is injected.
+$avif_fail = wpcu_attach( 'wpcut-avif-fail.png', 900, 600, 'png' );
+$avif_input = wpcu_attach( 'wpcut-input.avif', 1000, 700, 'avif' );
+$server_avif = wpcu_attach( 'wpcut-server-1.avif', 900, 600, 'avif' );
+wpcu_make_image( $dir . '/wpcut-server.jpg', 900, 600, 'jpg' ); // Server-only JPEG beside an AVIF attachment. // AVIF source needs a JPEG fallback. // AVIF decode failure is injected.
 
 // Strays next to the big image: an old theme size and an optimizer sidecar.
 copy( $dir . '/wpcut-big-300x200.jpg', $dir . '/wpcut-big-999x666.jpg' );
@@ -197,6 +205,17 @@ wpcu_ok( ! $leak, 'twin.jpg does not claim twin.png files as strays: ' . implode
 $report = Media_Report::build();
 $ids    = wp_list_pluck( $report['items'], 'id' );
 wpcu_ok( in_array( $big, $ids, true ) && in_array( $png, $ids, true ) && ! in_array( $gif, $ids, true ), 'report lists convertible images, not the GIF' );
+$catalog = $report['file_catalog'];
+$unregistered_paths = wp_list_pluck( $catalog['unregistered'], 'path' );
+wpcu_ok( in_array( $subdir . '/wpcut-server.jpg', $unregistered_paths, true ), 'server-only JPEG beside an AVIF attachment appears in unregistered files' );
+$catalog_big = array_values( array_filter( $catalog['library'], static function ( $item ) use ( $big ) { return $big === $item['id']; } ) );
+wpcu_ok( 1 === count( $catalog_big ) && count( $catalog_big[0]['files'] ) === count( $inv['files'] ), 'each attachment appears once with its original and sizes grouped beneath it' );
+$catalog_view = new ReflectionMethod( WPCleanup\Admin::class, 'render_file_catalog' );
+$catalog_view->setAccessible( true );
+ob_start();
+$catalog_view->invoke( new WPCleanup\Admin(), $report );
+$catalog_html = ob_get_clean();
+wpcu_ok( false !== strpos( $catalog_html, 'Current image files on the server' ) && false !== strpos( $catalog_html, 'wpcut-server.jpg' ) && false !== strpos( $catalog_html, 'Original source' ) && false !== strpos( $catalog_html, 'name="paths[]"' ) && false !== strpos( $catalog_html, 'Move selected server files to backup' ), 'Images tab shows expandable attachment variants and unregistered server files' );
 
 /* ---------------------------------------------------------------------- */
 /* 2. Convert                                                             */
@@ -207,14 +226,15 @@ $before_files = $files_snapshot();
 $before_db    = $db_snapshot();
 $backup       = Backup::start();
 $results      = array();
-foreach ( array( $big, $png, $small, $gif, $twin_j, $twin_p ) as $id ) {
+foreach ( array( $big, $png, $small, $gif, $twin_j, $twin_p, $avif_input ) as $id ) {
 	$results[ $id ] = Media_Converter::convert( $id, $backup );
 }
 wp_cache_flush();
-foreach ( array( $big, $png, $small, $twin_j, $twin_p ) as $id ) {
+foreach ( array( $big, $png, $small, $twin_j, $twin_p, $avif_input ) as $id ) {
 	wpcu_ok( 'converted' === $results[ $id ]['status'], "#$id converted: " . $results[ $id ]['message'] );
 }
 wpcu_ok( 'skipped' === $results[ $gif ]['status'], 'GIF skipped: ' . $results[ $gif ]['message'] );
+wpcu_ok( 'image/jpeg' === get_post_mime_type( $avif_input ) && in_array( $subdir . '/wpcut-input.avif', $results[ $avif_input ]['backed_up'], true ), 'AVIF-only source gets one JPEG fallback and its old AVIF is backed up' );
 
 $m = wp_get_attachment_metadata( $big );
 $outputs = get_post_meta( $big, Media_Policy::OUTPUT_META, true );
@@ -234,6 +254,8 @@ $reference_details = $results[ $big ]['reference_changes'];
 wpcu_ok( $reference_details && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'post_content' ) && false !== strpos( $change['from'], 'wpcut-big-1024x683.jpg' ) && false !== strpos( $change['to'], '-fallback.jpg' ); } ) ) > 0, 'reference details show location, old path and JPEG path' );
 $stored_backup = Backup::open( $backup->id );
 wpcu_ok( ! empty( $stored_backup->manifest['items'][0]['extra']['reference_changes'] ) && ! empty( $stored_backup->manifest['items'][0]['extra']['moved'] ), 'reference changes and original file paths remain available in the backup manifest' );
+$with_backups = Media_Files::catalog( Media_Files::all_ids() );
+wpcu_ok( ! array_filter( wp_list_pluck( $with_backups['unregistered'], 'path' ), static function ( $path ) { return false !== strpos( $path, 'wp-cleanup-' ); } ), 'private backup images never appear as unregistered uploads files' );
 $backup_view = new ReflectionMethod( WPCleanup\Admin::class, 'render_backups' );
 $backup_view->setAccessible( true );
 ob_start();
@@ -337,11 +359,45 @@ $bad = array_filter(
 		return ! $x['ok'];
 	}
 );
-wpcu_ok( 6 === count( $res ) && ! $bad, 'restore of 6 converted images reported ok: ' . wp_json_encode( array_values( $bad ) ) );
+wpcu_ok( 7 === count( $res ) && ! $bad, 'restore of 7 converted images reported ok: ' . wp_json_encode( array_values( $bad ) ) );
 wp_cache_flush();
 wpcu_ok( $before_files === $files_snapshot(), 'restore: every original file back byte-identical, new files gone from uploads' );
 wpcu_ok( $before_db == $db_snapshot(), 'restore: attachments, content, meta and options identical' ); // phpcs:ignore
 wpcu_ok( (bool) glob( $backup->dir . '/files/*/created/' . $up['subdir'] . '/wpcut-big*.avif' ), 'unused AVIFs parked in the backup set, not deleted' );
+
+/* Optional JPEG fallback: AVIF-only mode keeps no JPEG in uploads. */
+$no_fallback = wpcu_attach( 'wpcut-avif-only.jpg', 1200, 800, 'jpg' );
+$optional_files = $files_snapshot();
+$optional_db = $db_snapshot();
+Media_Policy::save( array( 'jpeg_fallback' => false ) );
+$b_optional = Backup::start();
+$only = Media_Converter::convert( $no_fallback, $b_optional );
+$only_outputs = get_post_meta( $no_fallback, Media_Policy::OUTPUT_META, true );
+wpcu_ok( 'converted' === $only['status'] && 'image/avif' === get_post_mime_type( $no_fallback ) && empty( $only_outputs['jpeg'] ), 'fallback-off policy produces an AVIF attachment with no JPEG' );
+wpcu_ok( ! (bool) glob( $dir . '/wpcut-avif-only*.jpg' ) && Media_Inventory::attachment( $no_fallback )['compliant'], 'original JPEG is moved to backup and AVIF-only output is compliant' );
+$only_restored = Backup::open( $b_optional->id )->restore();
+wpcu_ok( 1 === count( $only_restored ) && $only_restored[0]['ok'] && $optional_files === $files_snapshot() && $optional_db == $db_snapshot(), 'AVIF-only conversion restores original file and database' ); // phpcs:ignore
+$reject_avif = static function ( $verified, $file, $mime ) { return 'image/avif' === $mime ? false : $verified; };
+add_filter( 'wp_cleanup_media_verify', $reject_avif, 10, 3 );
+$failure_files = $files_snapshot();
+$failure_db = $db_snapshot();
+$only_failed = Media_Converter::convert( $avif_fail, Backup::start() );
+remove_filter( 'wp_cleanup_media_verify', $reject_avif, 10 );
+wpcu_ok( 'failed' === $only_failed['status'] && $failure_files === $files_snapshot() && $failure_db == $db_snapshot(), 'AVIF failure without fallback leaves original and database unchanged' ); // phpcs:ignore
+delete_option( Media_Policy::OPTION );
+
+/* A server-only JPEG can be backed up and restored independently. */
+$file_path = $subdir . '/wpcut-server.jpg';
+$file_hash = md5_file( $dir . '/wpcut-server.jpg' );
+$file_backup = Backup::start();
+$file_result = Media_Orphan_Files::remove( $file_path, $file_backup, Media_Files::catalog( Media_Files::all_ids() ) );
+wpcu_ok( 'deleted' === $file_result['status'] && ! is_file( $dir . '/wpcut-server.jpg' ), 'unregistered JPEG moved into a file-only backup' );
+$file_restored = Backup::open( $file_backup->id )->restore();
+wpcu_ok( 1 === count( $file_restored ) && $file_restored[0]['ok'] && $file_hash === md5_file( $dir . '/wpcut-server.jpg' ), 'server-only JPEG restores byte-identically' );
+update_option( 'wpcut_server_ref', $u( 'wpcut-server.jpg' ) );
+$file_refused = Media_Orphan_Files::remove( $file_path, Backup::start(), Media_Files::catalog( Media_Files::all_ids() ) );
+wpcu_ok( 'refused' === $file_refused['status'] && is_file( $dir . '/wpcut-server.jpg' ), 'server-only file mentioned in WordPress data is refused' );
+delete_option( 'wpcut_server_ref' );
 
 /* ---------------------------------------------------------------------- */
 /* 5. Restore refuses to clobber later edits                              */

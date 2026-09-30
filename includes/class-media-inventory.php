@@ -131,7 +131,7 @@ final class Media_Inventory {
 	private static function is_compliant( $id, array $meta, array $files ) {
 		$s = Media_Policy::settings();
 		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
-		if ( is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
+		if ( $s['jpeg_fallback'] && is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
 			if ( 'image/jpeg' !== get_post_mime_type( $id ) || ! empty( $meta['original_image'] ) || ! empty( $meta['sizes'] ) || ( ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) ) ) {
 				return false;
 			}
@@ -148,6 +148,21 @@ final class Media_Inventory {
 			}
 			foreach ( $files as $file ) {
 				if ( ! in_array( $file['role'], array( 'attached', 'avif_full', 'avif_small' ), true ) ) {
+					return false;
+				}
+			}
+			return ! $s['set_flag'] || get_post_meta( $id, Media_Policy::ALPS_FLAG, true );
+		}
+		if ( ! $s['jpeg_fallback'] && 'image/avif' === get_post_mime_type( $id ) && empty( $meta['original_image'] ) && max( (int) ( isset( $meta['width'] ) ? $meta['width'] : 0 ), (int) ( isset( $meta['height'] ) ? $meta['height'] : 0 ) ) <= $s['full_max'] ) {
+			if ( is_array( $outputs ) && ( ! empty( $outputs['jpeg'] ) || ( isset( $outputs['policy'] ) && $outputs['policy'] != $s ) ) ) { // phpcs:ignore -- compare policy arrays.
+				return false;
+			}
+			$sizes = isset( $meta['sizes'] ) ? (array) $meta['sizes'] : array();
+			if ( array_diff( array_keys( $sizes ), array( $s['small_name'] ) ) ) {
+				return false;
+			}
+			foreach ( $files as $file ) {
+				if ( ! in_array( $file['role'], array( 'attached', 'size' ), true ) ) {
 					return false;
 				}
 			}

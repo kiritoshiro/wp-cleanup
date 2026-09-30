@@ -17,23 +17,23 @@ Scanning only reads. Nothing changes until you choose items and confirm.
 | Orphaned rows | Meta or term links whose object no longer exists, and expired transients |
 | Folders | Top-level folders in `uploads/` and `wp-content/` (e.g. `wflogs`, `woocommerce_uploads`) |
 
-## Images: one JPEG fallback with AVIF alternatives
+## Images: AVIF with an optional JPEG fallback
 
 WordPress often keeps an original, a scaled copy, many thumbnail sizes, and optimizer sidecars for one upload. **Tools → WP Cleanup → Images** (or the WP-CLI images command) replaces a JPEG, PNG, or AVIF attachment with:
 
-- **One optimized JPEG fallback**, at most **1920 px** on its longest side, with adjustable quality (default 82). No JPEG thumbnail copies are kept.
+- **An optional optimized JPEG fallback**, enabled by default, at most **1920 px** on its longest side, with adjustable quality (default 82). Exactly one JPEG is kept; no JPEG thumbnail copies are generated.
 - **One full AVIF**, at most **1920 px**, when the server can encode and verify it.
 - **One small AVIF**, at most **768 px**, when the full AVIF exceeds that size.
 
-The JPEG is the attachment file and the target of rewritten links, so direct URLs and older devices keep working. WordPress images rendered through wp_get_attachment_image() use a picture element with the AVIF alternatives and the same JPEG fallback. Custom theme markup, CSS background URLs and stored image HTML use the JPEG unless that theme supplies its own AVIF source. If AVIF conversion or verification fails, the plugin keeps the single JPEG and reports why AVIF was skipped.
+With the fallback enabled, the JPEG is the attachment file and the target of rewritten links, so direct URLs and older devices keep working. WordPress images rendered through wp_get_attachment_image() use a picture element with AVIF alternatives and the JPEG fallback. Custom theme markup, CSS backgrounds and stored image HTML use the JPEG unless the theme supplies its own AVIF source. If AVIF conversion or verification fails, the plugin keeps the single JPEG and reports why AVIF was skipped. Turn the fallback off under *Image policy* to keep AVIF only; if AVIF encoding then fails, the original image is left untouched.
 
-The plugin encodes and verifies new files before changing the database. It rewrites references in posts, meta, options and comments to the JPEG, including serialized and JSON-escaped data, then moves all old sizes, originals and sidecars into a restorable backup set. Rewritten references are shown as separate **Location**, **Original**, and **New** rows in each conversion result and under **Backups → Contents**. A failure while rewriting or moving files rolls back that image.
+The plugin encodes and verifies new files before changing the database. It rewrites references in posts, meta, options and comments to the selected main file, including serialized and JSON-escaped data, then moves all old sizes, originals and sidecars into a restorable backup set. Rewritten references are shown as separate **Location**, **Original**, and **New** rows in each conversion result and under **Backups → Contents**. A failure while rewriting or moving files rolls back that image.
 
-The size limits, JPEG quality and ALPS compatibility flag can be changed under *Image policy*. The default flag marks converted attachments for the Adventistai ALPS theme. GIF and WebP (which may be animated), site icons, custom headers and backgrounds, and offloaded files are not converted.
+The JPEG switch, size limits, JPEG quality and ALPS compatibility flag can be changed under *Image policy*. The default flag marks converted attachments for the Adventistai ALPS theme. GIF and WebP (which may be animated), site icons, custom headers and backgrounds, and offloaded files are not converted.
 
 **Space is freed when the backup set is deleted** on the Backups tab, after checking the site. Until then, **Restore** puts the old files and rewritten database values back. It refuses to overwrite edits made after conversion.
 
-JPEG encoding is required. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion still produces the JPEG fallback. AVIF filenames only get a numeric suffix when a file with the same AVIF name already exists, such as two attachments sharing a basename.
+JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion only produces JPEG when the fallback is enabled. AVIF-only mode requires AVIF encoding support. AVIF filenames only get a numeric suffix when a file with the same AVIF name already exists, such as two attachments sharing a basename.
 
     wp cleanup images status
     wp cleanup images convert --limit=20 --dry-run
@@ -43,6 +43,14 @@ Limits:
 - URLs stored in custom plugin tables are not rewritten. Yoast indexables are one example and normally refresh themselves.
 - A text mention of the exact same uploads path on another site could also be rewritten.
 - New uploads keep generating their usual sizes unless the theme limits them.
+
+### Current files on the server
+
+At the bottom of **Images**, **Current image files on the server** shows each Media Library attachment once. Expand one image to see its main file, original source, generated dimensions, AVIF alternatives, JPEG fallback, and any extra files the scanner associates with it.
+
+A separate list shows image files physically present in uploads that have **no Media Library attachment**, including JPEGs left beside AVIF attachments. These are not look-alike groups: a JPEG and AVIF can be intentional alternatives, and filenames alone do not prove two images are redundant. The list is a snapshot from the last full library check; check again after changing files.
+
+Select up to 20 unregistered files to move them into a restorable backup. The plugin rebuilds the file catalog and refuses any file name mentioned in WordPress posts, fields, options or comments. Theme code, CSS, custom plugin tables and external sites can still refer to a file, so review the list before moving it. The protected WP Cleanup backup folder is excluded from the server-file list.
 
 ### Where images are used, look-alikes and unused images
 

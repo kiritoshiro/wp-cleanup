@@ -94,3 +94,11 @@
 .wpcu-reference-change { border-bottom: 1px solid #dcdcde; padding: 6px 0 8px; }
 .wpcu-reference-change > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 4px; margin-top: 3px; }
 .wpcu-reference-change span, .wpcu-reference-change code { overflow-wrap: anywhere; word-break: break-word; }
+.wpcu-catalog-list, .wpcu-unregistered { margin-top: 10px; }
+.wpcu-catalog-image { border-bottom: 1px solid #dcdcde; }
+.wpcu-catalog-image > summary { display: flex; align-items: center; gap: 10px; padding: 8px 4px; cursor: pointer; }
+.wpcu-catalog-image > summary code { overflow-wrap: anywhere; }
+.wpcu-catalog-thumb { flex: 0 0 40px; }
+.wpcu-catalog-image .wpcu-scroll { margin: 2px 0 12px 50px; }
+.wpcu-catalog-table code, .wpcu-unregistered code { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 600px) { .wpcu-catalog-image .wpcu-scroll { margin-left: 0; } }

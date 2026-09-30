@@ -1,6 +1,6 @@
 <?php
 /**
- * Target image policy: one JPEG fallback plus a full and optional small AVIF.
+ * Target image policy: a full and optional small AVIF, plus an optional JPEG.
  *
  * Defaults use a 1920 px JPEG and full AVIF, plus an optional 768 px AVIF.
  * The ALPS flag remains available for theme compatibility.
@@ -26,7 +26,7 @@ final class Media_Policy {
 	const OUTPUT_META = '_wpcu_image_outputs';
 
 	/**
-	 * @return array{full_max:int,small_name:string,small_max:int,jpeg_max:int,jpeg_quality:int,set_flag:bool}
+	 * @return array{full_max:int,small_name:string,small_max:int,jpeg_max:int,jpeg_quality:int,jpeg_fallback:bool,set_flag:bool}
 	 */
 	public static function settings() {
 		$saved = get_option( self::OPTION, array() );
@@ -44,6 +44,7 @@ final class Media_Policy {
 			'small_max'  => 768,
 			'jpeg_max'   => 1920,
 			'jpeg_quality' => 82,
+			'jpeg_fallback' => true,
 			'set_flag'   => true,
 		);
 		$out               = wp_parse_args( $input, $defaults );
@@ -51,6 +52,7 @@ final class Media_Policy {
 		$out['small_max']  = max( 64, min( $out['full_max'] - 1, (int) $out['small_max'] ) );
 		$out['jpeg_max'] = max( 320, min( 8192, (int) $out['jpeg_max'] ) );
 		$out['jpeg_quality'] = max( 40, min( 95, (int) $out['jpeg_quality'] ) );
+		$out['jpeg_fallback'] = (bool) $out['jpeg_fallback'];
 		$out['small_name'] = sanitize_key( $out['small_name'] );
 		if ( '' === $out['small_name'] || 'full' === $out['small_name'] ) {
 			$out['small_name'] = $defaults['small_name'];
