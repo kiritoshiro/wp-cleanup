@@ -39,6 +39,8 @@ final class Media_Converter {
 			'files'        => 0,
 			'bytes_before' => 0,
 			'bytes_after'  => 0,
+			'reference_changes' => array(),
+			'backed_up'    => array(),
 		);
 
 		$reason = Media_Policy::skip_reason( $id );
@@ -107,6 +109,7 @@ final class Media_Converter {
 			}
 			$rewriter = new Reference_Rewriter( $map, $widths );
 			$changes  = $rewriter->plan( array_keys( $needles ), $id );
+			$reference_changes = self::reference_changes( $changes, $map );
 
 			// 4. Before-images.
 			$n = $backup->add_item(
@@ -149,6 +152,7 @@ final class Media_Converter {
 
 			$backup->set_extra( $n, 'created', array_map( array( __CLASS__, 'rel' ), $created ) );
 			$backup->set_extra( $n, 'moved', $moved );
+			$backup->set_extra( $n, 'reference_changes', $reference_changes );
 			$backup->set_extra( $n, 'meta_hash', self::meta_hash( $id ) );
 			$backup->set_extra(
 				$n,
@@ -166,6 +170,8 @@ final class Media_Converter {
 
 			$result['status']      = 'converted';
 			$result['bytes_after'] = $after;
+			$result['reference_changes'] = $reference_changes;
+			$result['backed_up'] = $moved;
 			$result['message']     = sprintf(
 				/* translators: 1: files, 2: size before, 3: size after, 4: references */
 				__( '%1$d file(s), %2$s → %3$s; %4$d reference(s) rewritten.', 'wp-cleanup' ),
@@ -184,6 +190,32 @@ final class Media_Converter {
 			$result['message'] = $e->getMessage();
 			return $result;
 		}
+	}
+
+	/** Explain each rewritten row and its old and new image paths. */
+	private static function reference_changes( array $changes, array $map ) {
+		$out = array();
+		foreach ( $changes as $change ) {
+			$where = $change['table'] . ' #' . $change['id'] . ' · ' . $change['column'];
+			foreach ( array( 'post_title', 'option_name', 'meta_key' ) as $label ) {
+				if ( ! empty( $change['row'][ $label ] ) ) {
+					$where .= ' (' . wp_html_excerpt( (string) $change['row'][ $label ], 100 ) . ')';
+					break;
+				}
+			}
+			$found = false;
+			foreach ( $map as $from => $to ) {
+				if ( false === strpos( $change['old'], $from ) && false === strpos( $change['old'], str_replace( '/', '\\/', $from ) ) ) {
+					continue;
+				}
+				$out[] = array( 'where' => $where, 'from' => $from, 'to' => $to );
+				$found = true;
+			}
+			if ( ! $found ) {
+				$out[] = array( 'where' => $where, 'from' => __( 'Image width descriptors', 'wp-cleanup' ), 'to' => __( 'Actual AVIF widths', 'wp-cleanup' ) );
+			}
+		}
+		return $out;
 	}
 
 	/**
@@ -255,7 +287,9 @@ final class Media_Converter {
 	 * @return array{path:string,width:int,height:int}
 	 */
 	private static function save( $editor, $dir, $name, array &$created ) {
-		$dest  = $dir . '/' . wp_unique_filename( $dir, $name );
+		// A JPEG or PNG with the same stem is expected; only an existing AVIF must force a new name.
+		$name  = sanitize_file_name( $name );
+		$dest  = $dir . '/' . ( file_exists( $dir . '/' . $name ) ? wp_unique_filename( $dir, $name ) : $name );
 		$saved = $editor->save( $dest, 'image/avif' );
 		if ( is_wp_error( $saved ) ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
@@ -276,10 +310,19 @@ final class Media_Converter {
 	private static function verify( array $file ) {
 		clearstatcache( true, $file['path'] );
 		$info = is_file( $file['path'] ) && filesize( $file['path'] ) > 0 ? wp_getimagesize( $file['path'] ) : false;
-		if ( ! $info || 'image/avif' !== ( isset( $info['mime'] ) ? $info['mime'] : '' ) || (int) $info[0] !== (int) $file['width'] || (int) $info[1] !== (int) $file['height'] ) {
+		$verified = $info && 'image/avif' === ( isset( $info['mime'] ) ? $info['mime'] : '' ) && (int) $info[0] === (int) $file['width'] && (int) $info[1] === (int) $file['height'];
+		// Some valid AVIF variants are not understood by PHP's header parser. Decode the image before refusing it.
+		if ( ! $verified && is_file( $file['path'] ) && 'image/avif' === wp_get_image_mime( $file['path'] ) ) {
+			$editor = wp_get_image_editor( $file['path'] );
+			if ( ! is_wp_error( $editor ) ) {
+				$size = $editor->get_size();
+				$verified = is_array( $size ) && (int) $size['width'] === (int) $file['width'] && (int) $size['height'] === (int) $file['height'];
+			}
+		}
+		if ( ! $verified ) {
 			/* translators: %s: file */
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'The new AVIF file %s did not verify.', 'wp-cleanup' ), wp_basename( $file['path'] ) ) );
+			throw new \RuntimeException( sprintf( __( 'The new AVIF file %s could not be decoded with the expected dimensions. The original image was kept.', 'wp-cleanup' ), wp_basename( $file['path'] ) ) );
 		}
 	}
 

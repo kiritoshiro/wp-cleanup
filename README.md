@@ -35,6 +35,8 @@ How each image is converted:
 3. **Back up.** Column-level before-images of everything that changes are written to a backup set.
 4. **Move the old files** (original, `-scaled`, every size, strays, sidecars) into the backup set. Any failure along the way rolls that image back completely.
 
+After a conversion, expand its result to see every changed database row, the old and new image paths, and each original file moved to backup. The same lists remain available under **Backups → Contents**. Conversion runs one image per request, so a server error stops at that image with a readable status. When no AVIF of the proposed name exists, the new file keeps the source stem and only changes its extension; a real AVIF filename collision still receives a suffix.
+
 **Never touched:** GIF and WebP (they can be animated), site icons, custom headers and backgrounds, and files that aren't on this server (for example, offloaded to S3).
 
 **Space is only freed once you delete the backup set** on the Backups tab, after checking the site. Until then, **Restore** puts every original file and every rewritten value back. It refuses, per image, if the image or a rewritten row has been edited since.
@@ -149,14 +151,14 @@ WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.php
 ```
 
-The usage suite (37 assertions) covers:
+The usage suite (48 assertions) covers:
 - every kind of image use, and revisions, trashed posts and dimension settings not counting
 - look-alike detection: resized and identical copies found; different pictures, flat graphics and crops kept apart; no chaining
 - the updater: release parsing, refusing drafts, pre-releases and foreign packages, digest checks on a real download (a local one, plus the latest GitHub release when online), and "View details" not claiming wordpress.org's unrelated `wp-cleanup`
 
 Run it while the site is served on its own URL (for example with `php -S`) so the local download check can run.
 
-The image suite (45 assertions) covers:
+The image suite (50 assertions) covers:
 - inventory, including strays, sidecars and same-name neighbours
 - conversion sizes, the ALPS flag and transparency
 - reference rewriting in HTML, relative URLs, JSON-escaped and serialized data, and `srcset`
