@@ -74,3 +74,13 @@
 	.wpcu-items .wpcu-reason { display: none; }
 	.wpcu-filter-search { min-width: 0; width: 100%; }
 }
+.wpcu-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 22px; }
+.wpcu-section-head h2 { margin: 0; }
+.wpcu-section-head .wpcu-inline-form { margin: 0; }
+.wpcu-dup-remove { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.wpcu-dup-remove label { white-space: nowrap; }
+.wpcu-selection-count { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.wpcu-sort-button { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; font-weight: 600; padding: 0; text-align: inherit; }
+.wpcu-sort-button:hover, .wpcu-sort-button:focus { color: #135e96; text-decoration: underline; }
+.wpcu-sortable th[aria-sort="ascending"] .wpcu-sort-button::after { content: " \25B2"; font-size: 10px; }
+.wpcu-sortable th[aria-sort="descending"] .wpcu-sort-button::after { content: " \25BC"; font-size: 10px; }
