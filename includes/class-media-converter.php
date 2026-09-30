@@ -25,6 +25,7 @@ final class Media_Converter {
 	 * @return array{id:int,status:string,message:string,files:int,bytes_before:int,bytes_after:int}
 	 */
 	public static function convert( $id, $backup = null, $dry_run = false ) {
+		global $wpdb;
 		$id     = (int) $id;
 		$s      = Media_Policy::settings();
 		$result = array(
@@ -87,17 +88,33 @@ final class Media_Converter {
 			}
 			if ( Media_Policy::avif_supported() ) {
 				$avif_created = array();
+				$avif_editor  = '';
 				try {
-					list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created );
+					list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor );
 					$created = array_merge( $created, $avif_created );
 					if ( ! $jpeg ) {
 						$rotated = $avif_rotated;
 					}
 				} catch ( \Exception $e ) {
 					$avif_error = $e->getMessage();
-					foreach ( $avif_created as $path ) {
-						if ( is_file( $path ) ) {
-							@unlink( $path ); // phpcs:ignore -- Incomplete new output.
+					self::discard_outputs( $avif_created );
+					$full  = null;
+					$small = null;
+					// Retry with GD if WordPress first chose another editor and GD supports both formats.
+					if ( 'WP_Image_Editor_GD' !== $avif_editor && self::gd_can_encode_avif( self::source( $id, $inv ) ) ) {
+						$avif_created = array();
+						try {
+							list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor, true );
+							$created = array_merge( $created, $avif_created );
+							$avif_error = '';
+							if ( ! $jpeg ) {
+								$rotated = $avif_rotated;
+							}
+						} catch ( \Exception $retry_error ) {
+							self::discard_outputs( $avif_created );
+							$full  = null;
+							$small = null;
+							$avif_error .= ' ' . sprintf( __( 'GD retry also failed: %s', 'wp-cleanup' ), $retry_error->getMessage() );
 						}
 					}
 				}
@@ -186,19 +203,23 @@ final class Media_Converter {
 			);
 
 			$after = ( $jpeg ? (int) filesize( $jpeg['path'] ) : 0 ) + ( $full ? (int) filesize( $full['path'] ) : 0 ) + ( $small ? (int) filesize( $small['path'] ) : 0 );
-			$backup->set_result( $n, 'deleted', sprintf( '%d file(s) replaced; %d reference(s) rewritten', count( $remove ), count( $changes ) ) );
+			$revision_count = count( array_filter( $changes, static function ( $change ) use ( $wpdb ) {
+				return $wpdb->posts === $change['table'] && 'revision' === $change['row']['post_type'];
+			} ) );
+			$backup->set_result( $n, 'deleted', sprintf( '%d file(s) replaced; %d stored field(s) rewritten (%d in revisions)', count( $remove ), count( $changes ), $revision_count ) );
 
 			$result['status']      = 'converted';
 			$result['bytes_after'] = $after;
 			$result['reference_changes'] = $reference_changes;
 			$result['backed_up'] = $moved;
 			$result['message']     = sprintf(
-				/* translators: 1: files, 2: size before, 3: size after, 4: references */
-				__( '%1$d file(s), %2$s → %3$s; %4$d reference(s) rewritten.', 'wp-cleanup' ),
+				/* translators: 1: files, 2: size before, 3: size after, 4: stored fields, 5: revisions */
+				__( '%1$d file(s), %2$s → %3$s; %4$d stored field(s) rewritten (%5$d in revisions). These are database records, not separate image uses.', 'wp-cleanup' ),
 				count( $inv['files'] ),
 				size_format( $inv['bytes'], 1 ),
 				size_format( $after, 1 ),
-				count( $changes )
+				count( $changes ),
+				$revision_count
 			);
 			if ( $avif_error && $jpeg ) {
 				$result['message'] .= ' ' . sprintf( __( 'The JPEG fallback is active; AVIF could not be made: %s', 'wp-cleanup' ), $avif_error );
@@ -221,7 +242,10 @@ final class Media_Converter {
 		global $wpdb;
 		foreach ( $changes as $change ) {
 			$row = $change['row'];
-			if ( $wpdb->posts === $change['table'] ) {
+			if ( $wpdb->posts === $change['table'] && 'revision' === $row['post_type'] ) {
+				$parent = get_post( (int) $row['post_parent'] );
+				$where = sprintf( __( 'Revision #%1$d of %2$s (#%3$d), %4$s', 'wp-cleanup' ), $change['id'], $parent ? $parent->post_title : __( 'deleted post', 'wp-cleanup' ), (int) $row['post_parent'], $change['column'] );
+			} elseif ( $wpdb->posts === $change['table'] ) {
 				$where = sprintf( __( 'Post: %1$s (#%2$s), %3$s', 'wp-cleanup' ), wp_html_excerpt( (string) $row['post_title'], 100 ), $change['id'], $change['column'] );
 			} elseif ( $wpdb->options === $change['table'] ) {
 				$where = sprintf( __( 'Site option: %1$s (#%2$s)', 'wp-cleanup' ), $row['option_name'], $change['id'] );
@@ -319,12 +343,13 @@ final class Media_Converter {
 	}
 
 	/** Make a full AVIF and, when needed, one small AVIF. */
-	private static function encode_avif( $id, array $inv, array $s, array &$created ) {
+	private static function encode_avif( $id, array $inv, array $s, array &$created, &$editor_class, $gd_only = false ) {
 		$source = self::source( $id, $inv );
-		$editor = wp_get_image_editor( $source );
+		$editor = self::avif_editor( $source, $gd_only );
 		if ( is_wp_error( $editor ) ) {
 			throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 		}
+		$editor_class = get_class( $editor );
 		$rotated = method_exists( $editor, 'maybe_exif_rotate' ) ? $editor->maybe_exif_rotate() : false;
 		if ( is_wp_error( $rotated ) ) {
 			throw new \RuntimeException( $rotated->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
@@ -341,7 +366,7 @@ final class Media_Converter {
 
 		$small = null;
 		if ( max( $full['width'], $full['height'] ) > $s['small_max'] ) {
-			$editor = wp_get_image_editor( $full['path'] );
+			$editor = self::avif_editor( $full['path'], $gd_only );
 			if ( is_wp_error( $editor ) ) {
 				throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
@@ -354,6 +379,40 @@ final class Media_Converter {
 			self::verify( $small, 'image/avif' );
 		}
 		return array( $full, $small, true === $rotated );
+	}
+
+	/** Choose GD for the retry without changing the editor used by other requests. */
+	private static function avif_editor( $path, $gd_only ) {
+		if ( ! $gd_only ) {
+			return wp_get_image_editor( $path );
+		}
+		$only_gd = static function () { return array( 'WP_Image_Editor_GD' ); };
+		add_filter( 'wp_image_editors', $only_gd, 999 );
+		try {
+			return wp_get_image_editor( $path );
+		} finally {
+			remove_filter( 'wp_image_editors', $only_gd, 999 );
+		}
+	}
+
+	/** A retry is possible only if GD handles both input and AVIF output. */
+	private static function gd_can_encode_avif( $source ) {
+		if ( ! class_exists( 'WP_Image_Editor_GD' ) ) {
+			require_once ABSPATH . WPINC . '/class-wp-image-editor-gd.php';
+		}
+		$source_mime = wp_get_image_mime( $source );
+		return $source_mime
+			&& \WP_Image_Editor_GD::supports_mime_type( 'image/avif' )
+			&& \WP_Image_Editor_GD::supports_mime_type( $source_mime );
+	}
+
+	/** Remove incomplete AVIF files before trying another encoder or falling back to JPEG. */
+	private static function discard_outputs( array $paths ) {
+		foreach ( $paths as $path ) {
+			if ( is_file( $path ) ) {
+				@unlink( $path ); // phpcs:ignore -- Incomplete new output.
+			}
+		}
 	}
 
 	/**
@@ -393,18 +452,36 @@ final class Media_Converter {
 		clearstatcache( true, $file['path'] );
 		$info = is_file( $file['path'] ) && filesize( $file['path'] ) > 0 ? wp_getimagesize( $file['path'] ) : false;
 		$verified = $info && $mime === ( isset( $info['mime'] ) ? $info['mime'] : '' ) && (int) $info[0] === (int) $file['width'] && (int) $info[1] === (int) $file['height'];
+		$observed = $info ? sprintf( '%1$d×%2$d %3$s', (int) $info[0], (int) $info[1], isset( $info['mime'] ) ? $info['mime'] : '?' ) : __( 'unreadable header', 'wp-cleanup' );
 		// Some valid AVIF variants are not understood by PHP's header parser. Decode the image before refusing it.
 		if ( ! $verified && is_file( $file['path'] ) && $mime === wp_get_image_mime( $file['path'] ) ) {
 			$editor = wp_get_image_editor( $file['path'] );
-			if ( ! is_wp_error( $editor ) ) {
+			if ( is_wp_error( $editor ) ) {
+				$observed .= '; ' . $editor->get_error_message();
+			} else {
 				$size = $editor->get_size();
-				$verified = is_array( $size ) && (int) $size['width'] === (int) $file['width'] && (int) $size['height'] === (int) $file['height'];
+				if ( is_array( $size ) ) {
+					$observed .= sprintf( '; decoder %1$d×%2$d', (int) $size['width'], (int) $size['height'] );
+					$verified = (int) $size['width'] === (int) $file['width'] && (int) $size['height'] === (int) $file['height'];
+				}
+			}
+		}
+		if ( ! $verified && 'image/avif' === $mime && self::gd_can_encode_avif( $file['path'] ) ) {
+			$gd_editor = self::avif_editor( $file['path'], true );
+			if ( is_wp_error( $gd_editor ) ) {
+				$observed .= '; GD: ' . $gd_editor->get_error_message();
+			} else {
+				$gd_size = $gd_editor->get_size();
+				if ( is_array( $gd_size ) ) {
+					$observed .= sprintf( '; GD decoder %1$d×%2$d', (int) $gd_size['width'], (int) $gd_size['height'] );
+					$verified = (int) $gd_size['width'] === (int) $file['width'] && (int) $gd_size['height'] === (int) $file['height'];
+				}
 			}
 		}
 		if ( ! apply_filters( 'wp_cleanup_media_verify', $verified, $file, $mime ) ) {
-			/* translators: 1: MIME type, 2: file */
+			/* translators: 1: MIME type, 2: file, 3: expected width, 4: expected height, 5: observed format and dimensions */
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'The new %1$s file %2$s could not be decoded with the expected dimensions.', 'wp-cleanup' ), $mime, wp_basename( $file['path'] ) ) );
+			throw new \RuntimeException( sprintf( __( 'The new %1$s file %2$s could not be decoded with the expected dimensions (%3$d×%4$d expected; %5$s).', 'wp-cleanup' ), $mime, wp_basename( $file['path'] ), (int) $file['width'], (int) $file['height'], $observed ) );
 		}
 	}
 

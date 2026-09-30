@@ -157,6 +157,7 @@ $content   = '<!-- wp:image {"id":' . $big . ',"sizeSlug":"large","url":"' . $es
 	. '<p>Look-alike that must stay: wpcut-big-300x200.jpg.bak and not-wpcut-big.jpg</p>';
 $post      = wp_insert_post( wp_slash( array( 'post_title' => 'Image host', 'post_content' => $content, 'post_status' => 'publish' ) ) ); // wp_slash keeps the JSON \/ escapes.
 update_post_meta( $post, '_wpcu_test', 1 );
+$revision = wp_insert_post( wp_slash( array( 'post_type' => 'revision', 'post_parent' => $post, 'post_title' => 'Image host', 'post_content' => $content, 'post_status' => 'inherit' ) ) );
 update_post_meta( $post, 'wpcut_gallery', array( 'items' => array( array( 'thumb' => $u( 'wpcut-twin-150x150.png' ) ) ), 'nested' => serialize( array( 'u' => $u( 'wpcut-big-150x150.jpg' ) ) ) ) );
 update_option( 'wpcut_json', wp_json_encode( array( 'hero' => $u( 'wpcut-big-scaled.jpg' ) ) ) );
 $o      = new stdClass();
@@ -179,6 +180,7 @@ $files_snapshot = static function () use ( $dir ) {
 $db_snapshot    = static function () use ( $wpdb, $post ) {
 	return array(
 		'post'  => $wpdb->get_var( $wpdb->prepare( "SELECT post_content FROM {$wpdb->posts} WHERE ID = %d", $post ) ),
+		'revisions' => $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_content FROM {$wpdb->posts} WHERE post_type = 'revision' AND post_parent = %d ORDER BY ID", $post ), ARRAY_A ),
 		'meta'  => $wpdb->get_results( "SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN (SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wpcu_test') ORDER BY post_id, meta_key, meta_id", ARRAY_A ),
 		'mimes' => $wpdb->get_results( "SELECT ID, post_mime_type FROM {$wpdb->posts} WHERE ID IN (SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wpcu_test') ORDER BY ID", ARRAY_A ),
 		'opts'  => $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'wpcut\\_%' ORDER BY option_name", ARRAY_A ),
@@ -251,6 +253,7 @@ wpcu_ok( 3 === count( $left ) && 1 === count( preg_grep( '/\.jpe?g$/', $left ) )
 wpcu_ok( $subdir . '/wpcut-big.avif' === $outputs['avif_full'] && $subdir . '/wpcut-big-768x512.avif' === $outputs['avif_small'], 'full and small AVIF alternatives are recorded' );
 wpcu_ok( in_array( $subdir . '/wpcut-big.jpg', $results[ $big ]['backed_up'], true ) && in_array( $subdir . '/wpcut-big-scaled.jpg', $results[ $big ]['backed_up'], true ), 'old original and scaled image were moved into the backup set' );
 $reference_details = $results[ $big ]['reference_changes'];
+wpcu_ok( 'revision' === get_post_type( $revision ) && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'Revision #' ) && false !== strpos( $change['where'], 'Image host' ); } ) ) > 0 && false !== strpos( $results[ $big ]['message'], 'in revisions). These are database records, not separate image uses.' ), 'revisions are rewritten but explicitly labeled and excluded from image-use counts' );
 wpcu_ok( $reference_details && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'post_content' ) && false !== strpos( $change['from'], 'wpcut-big-1024x683.jpg' ) && false !== strpos( $change['to'], '-fallback.jpg' ); } ) ) > 0, 'reference details show location, old path and JPEG path' );
 $stored_backup = Backup::open( $backup->id );
 wpcu_ok( ! empty( $stored_backup->manifest['items'][0]['extra']['reference_changes'] ) && ! empty( $stored_backup->manifest['items'][0]['extra']['moved'] ), 'reference changes and original file paths remain available in the backup manifest' );
@@ -261,7 +264,7 @@ $backup_view->setAccessible( true );
 ob_start();
 $backup_view->invoke( new WPCleanup\Admin() );
 $backup_html = ob_get_clean();
-wpcu_ok( false !== strpos( $backup_html, 'reference path changes' ) && false !== strpos( $backup_html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $backup_html, 'wpcut-big-fallback.jpg' ), 'Backups tab exposes expandable three-line reference details' );
+wpcu_ok( false !== strpos( $backup_html, 'stored path entries (including revisions)' ) && false !== strpos( $backup_html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $backup_html, 'wpcut-big-fallback.jpg' ), 'Backups tab exposes expandable three-line reference details' );
 
 $ms = wp_get_attachment_metadata( $small );
 wpcu_ok( array() === $ms['sizes'] && 500 === $ms['width'], 'small image: one JPEG, no extra JPEG size' );
@@ -319,7 +322,7 @@ add_filter( 'wp_cleanup_media_verify', $reject_avif, 10, 3 );
 $avif_result = Media_Converter::convert( $avif_fail, $backup );
 remove_filter( 'wp_cleanup_media_verify', $reject_avif, 10 );
 $failed_outputs = get_post_meta( $avif_fail, Media_Policy::OUTPUT_META, true );
-wpcu_ok( 'converted' === $avif_result['status'] && 'image/jpeg' === get_post_mime_type( $avif_fail ), 'AVIF decode failure still converts to JPEG: ' . $avif_result['message'] );
+wpcu_ok( 'converted' === $avif_result['status'] && 'image/jpeg' === get_post_mime_type( $avif_fail ) && false !== strpos( $avif_result['message'], 'expected;' ), 'AVIF decode failure reports expected and observed dimensions while retaining JPEG: ' . $avif_result['message'] );
 wpcu_ok( empty( $failed_outputs['avif_full'] ) && ! empty( $failed_outputs['avif_error'] ) && 1 === count( preg_grep( '/\.jpe?g$/', glob( $dir . '/wpcut-avif-fail*' ) ) ), 'AVIF failure leaves exactly one JPEG, without partial AVIF files' );
 wpcu_ok( in_array( $subdir . '/wpcut-avif-fail.png', $avif_result['backed_up'], true ) && Media_Inventory::attachment( $avif_fail )['compliant'], 'old PNG moved to backup and JPEG-only output follows policy' );
 wpcu_ok( false === strpos( wp_get_attachment_image( $avif_fail, 'full' ), '<picture>' ), 'JPEG-only output renders without an AVIF source' );
@@ -364,6 +367,28 @@ wp_cache_flush();
 wpcu_ok( $before_files === $files_snapshot(), 'restore: every original file back byte-identical, new files gone from uploads' );
 wpcu_ok( $before_db == $db_snapshot(), 'restore: attachments, content, meta and options identical' ); // phpcs:ignore
 wpcu_ok( (bool) glob( $backup->dir . '/files/*/created/' . $up['subdir'] . '/wpcut-big*.avif' ), 'unused AVIFs parked in the backup set, not deleted' );
+
+/* If the first image editor cannot write AVIF, GD retries before using JPEG alone. */
+class WPCU_Failing_Avif_Editor extends WP_Image_Editor_GD {
+	public function save( $destfilename = null, $mime_type = null ) {
+		if ( 'image/avif' === $mime_type ) {
+			return new WP_Error( 'wpcu_test_avif', 'First AVIF encoder failed.' );
+		}
+		return parent::save( $destfilename, $mime_type );
+	}
+}
+$retry_id = wpcu_attach( 'wpcut-encoder-retry.png', 800, 600, 'png' );
+$retry_files = $files_snapshot();
+$retry_db = $db_snapshot();
+$first_editor = static function () { return array( 'WPCU_Failing_Avif_Editor', 'WP_Image_Editor_GD' ); };
+add_filter( 'wp_image_editors', $first_editor, 100 );
+$retry_backup = Backup::start();
+$retry_result = Media_Converter::convert( $retry_id, $retry_backup );
+remove_filter( 'wp_image_editors', $first_editor, 100 );
+$retry_outputs = get_post_meta( $retry_id, Media_Policy::OUTPUT_META, true );
+wpcu_ok( 'converted' === $retry_result['status'] && ! empty( $retry_outputs['avif_full'] ) && empty( $retry_outputs['avif_error'] ), 'GD retry makes a verified AVIF after the first encoder fails: ' . $retry_result['message'] );
+$retry_restored = Backup::open( $retry_backup->id )->restore();
+wpcu_ok( 1 === count( $retry_restored ) && $retry_restored[0]['ok'] && $retry_files === $files_snapshot() && $retry_db == $db_snapshot(), 'GD retry conversion restores the original and clears new outputs' ); // phpcs:ignore
 
 /* Optional JPEG fallback: AVIF-only mode keeps no JPEG in uploads. */
 $no_fallback = wpcu_attach( 'wpcut-avif-only.jpg', 1200, 800, 'jpg' );
