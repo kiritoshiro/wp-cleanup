@@ -50,7 +50,7 @@ final class Code_Index {
 	/** @var array<string,int[]> declared class/interface/trait name => source ids */
 	private $classes = array();
 
-	/** @var array<string,array{ids:int[],raw:bool}> source token => owners; raw tokens match without a word boundary */
+	/** @var array<string,array{ids:int[],raw:bool,exact:bool}> source token => owners; raw tokens match without a word boundary, exact ones only the whole name */
 	private $tokens = array();
 
 	/** @var int[]|null */
@@ -324,30 +324,37 @@ final class Code_Index {
 			if ( ! in_array( $source['kind'], array( 'plugin', 'theme' ), true ) ) {
 				continue;
 			}
-			// Slug-derived tokens must end at a word boundary; curated signature prefixes match raw.
+			// Slug-derived tokens must end at a word boundary; curated signature prefixes match raw,
+			// and curated exact names ("name$") only the whole name.
 			$tokens = array(
-				$source['slug']                        => false,
-				str_replace( '-', '_', $source['slug'] ) => false,
-				(string) $source['textdomain']         => false,
+				$source['slug']                        => 'word',
+				str_replace( '-', '_', $source['slug'] ) => 'word',
+				(string) $source['textdomain']         => 'word',
 			);
 			if ( isset( $signatures[ $source['slug'] ] ) ) {
 				foreach ( $signatures[ $source['slug'] ]['prefixes'] as $prefix ) {
-					$tokens[ $prefix ] = true;
+					if ( Signatures::is_exact( $prefix ) ) {
+						$tokens[ substr( $prefix, 0, -1 ) ] = 'exact';
+					} else {
+						$tokens[ $prefix ] = 'raw';
+					}
 				}
 			}
-			foreach ( $tokens as $token => $raw ) {
+			foreach ( $tokens as $token => $mode ) {
 				$token = strtolower( (string) $token );
-				if ( strlen( $token ) < 3 && ! $raw ) {
+				if ( strlen( $token ) < 3 && 'word' === $mode ) {
 					continue;
 				}
 				if ( '' === $token || in_array( $token, self::STOPWORDS, true ) ) {
 					continue;
 				}
 				if ( ! isset( $this->tokens[ $token ] ) ) {
-					$this->tokens[ $token ] = array( 'ids' => array(), 'raw' => $raw );
+					$this->tokens[ $token ] = array( 'ids' => array(), 'raw' => false, 'exact' => true );
 				}
 				$this->tokens[ $token ]['ids'][] = $id;
-				$this->tokens[ $token ]['raw']   = $this->tokens[ $token ]['raw'] || $raw;
+				$this->tokens[ $token ]['raw']   = $this->tokens[ $token ]['raw'] || 'raw' === $mode;
+				// A token is exact-only when every source declared it that way.
+				$this->tokens[ $token ]['exact'] = $this->tokens[ $token ]['exact'] && 'exact' === $mode;
 			}
 		}
 	}
@@ -453,11 +460,56 @@ final class Code_Index {
 			if ( strlen( $token ) <= strlen( $best['match'] ) ) {
 				continue;
 			}
-			$hit = $info['raw'] ? 0 === strpos( $name, $token ) : self::has_prefix( $name, $token );
+			if ( $info['exact'] ) {
+				$hit = $name === $token;
+			} else {
+				$hit = $info['raw'] ? 0 === strpos( $name, $token ) : self::has_prefix( $name, $token );
+			}
 			if ( $hit ) {
 				$best = array( 'ids' => array_values( array_unique( $info['ids'] ) ), 'match' => $token );
 			}
 		}
+		return $best;
+	}
+
+	/**
+	 * Installed plugins/themes whose slug appears inside the name, for names built
+	 * around a slug such as update caches ("puc_external_updates_theme-{slug}",
+	 * "external_updates-{slug}"). The slug must stand as its own word.
+	 *
+	 * @param string $name Normalized name.
+	 * @return array{ids:int[],match:string}
+	 */
+	public function slug_owners( $name ) {
+		$name = strtolower( $name );
+		$best = array( 'ids' => array(), 'match' => '' );
+		foreach ( $this->sources as $id => $source ) {
+			if ( ! in_array( $source['kind'], array( 'plugin', 'theme' ), true ) ) {
+				continue;
+			}
+			$slug = strtolower( (string) $source['slug'] );
+			foreach ( array_unique( array( $slug, str_replace( '-', '_', $slug ) ) ) as $needle ) {
+				// Short or generic slugs ("blocks", "forms") would match too much.
+				if ( strlen( $needle ) < 6 || in_array( $needle, self::STOPWORDS, true ) || strlen( $needle ) < strlen( $best['match'] ) ) {
+					continue;
+				}
+				$at = strpos( $name, $needle );
+				while ( false !== $at ) {
+					$end    = $at + strlen( $needle );
+					$before = 0 === $at || false !== strpos( '_-.:|', $name[ $at - 1 ] );
+					$after  = strlen( $name ) === $end || false !== strpos( '_-.:|', $name[ $end ] );
+					if ( $before && $after ) {
+						if ( strlen( $needle ) > strlen( $best['match'] ) ) {
+							$best = array( 'ids' => array(), 'match' => $needle );
+						}
+						$best['ids'][] = $id;
+						break;
+					}
+					$at = strpos( $name, $needle, $at + 1 );
+				}
+			}
+		}
+		$best['ids'] = array_values( array_unique( $best['ids'] ) );
 		return $best;
 	}
 

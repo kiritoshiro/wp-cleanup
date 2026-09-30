@@ -66,6 +66,14 @@ Each item gets a status, based on evidence in this order:
 
 "References" comes from an index of every identifier-like string literal and class name in installed PHP code, including WordPress core. The index is cached and rebuilt whenever plugins or themes change. If any code can't be fully read (for example a file over 8 MB), nothing is marked orphaned until it can.
 
+Many plugins and themes build names at runtime, so the name in the database differs from the literal in their code. Each name is therefore also checked in these forms:
+
+- **Carbon Fields keys**, such as `_hero_carousel|slide_image|1|0|value` or `_footer_address||0|_empty`. These are checked by their field name (`hero_carousel`, `footer_address`), so theme options and complex fields count as in use while the theme defining them is active.
+- **Numeric suffixes**, such as `post_by_email_address4` (a per-user id) or `…_backup_14_2_1` (a version). These are also checked without the suffix.
+- **Installed folder names inside a name**, such as `puc_external_updates_theme-{theme}` or `external_updates-{plugin}` (update caches). These are credited to that plugin or theme with medium confidence, but only when nothing else claims the name.
+
+An exact reference in any of these forms beats a match on a prefix alone. Core names that WordPress builds dynamically are protected too: `_oembed_*` caches, post-format fields, custom-header timestamps, and pending-invite and bulk-delete options. Signature entries ending in `$` label one exact name (for example Elementor's `e_events` table) instead of a whole prefix.
+
 ## Safety model
 
 - A selection is re-checked against a **fresh scan** at deletion time, so a stale screen or a crafted request can't delete anything that is core or in use now.
@@ -135,6 +143,6 @@ The suite covers:
 
 - Single-site only.
 - On nginx, the backup folder is protected only by its random name. If directory listing is on for `uploads/`, block `wp-cleanup-*` in the server config.
-- Names built entirely at runtime (with no literal prefix or class name in the code) can't be traced back to their plugin. They show as "unknown owner", never as "orphaned".
+- Names built entirely at runtime (with no literal prefix, field name, class name or folder name in the code) can't be traced back to their plugin. They show as "unknown owner", never as "orphaned".
 - Very large tables are copied into the backup inside one request. Use WP-CLI for those.
 - Uninstalling the plugin deletes its backup sets.

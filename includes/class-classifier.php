@@ -80,12 +80,16 @@ final class Classifier {
 			}
 		}
 
-		// Code references: try every spelling; the first one with hits wins.
-		$refs = array( 'ids' => array(), 'match' => '' );
+		// Code references: an exact literal under any spelling beats a prefix hit, so a
+		// derived name ("hero" from "_hero|x|0|0|value") wins over a loose prefix match.
+		$refs = array( 'ids' => array(), 'match' => '', 'exact' => false );
 		foreach ( $names as $candidate ) {
-			$refs = $this->index->references( $candidate );
-			if ( $refs['ids'] ) {
-				break;
+			$hit = $this->index->references( $candidate );
+			if ( $hit['ids'] && ( ! empty( $hit['exact'] ) || ! $refs['ids'] ) ) {
+				$refs = $hit;
+				if ( ! empty( $hit['exact'] ) ) {
+					break;
+				}
 			}
 		}
 		$tokens = $this->index->token_owners( $name );
@@ -106,15 +110,20 @@ final class Classifier {
 			}
 		}
 
+		// Weakest ownership evidence: an installed slug inside the name. Only consulted when
+		// nothing else claims the name, and never enough on its own to call it orphaned.
+		$slugs = ( $tokens['ids'] || $refs['ids'] ) ? array( 'ids' => array(), 'match' => '' ) : $this->index->slug_owners( $name );
+
 		$active   = array();
 		$inactive = array();
-		foreach ( array( $tokens, $refs ) as $hit ) { // Token owners first: they name the most likely owner.
+		// Token owners first: they name the most likely owner.
+		foreach ( array( 'token' => $tokens, 'ref' => $refs, 'slug' => $slugs ) as $kind => $hit ) {
 			foreach ( $hit['ids'] as $id ) {
 				$source = $this->index->source( $id );
 				if ( ! $source ) {
 					continue;
 				}
-				$entry = array( 'source' => $source, 'match' => $hit['match'], 'by_token' => $hit === $tokens );
+				$entry = array( 'source' => $source, 'match' => $hit['match'], 'kind' => $kind );
 				if ( $source['active'] ) {
 					$active[] = $entry;
 				} else {
@@ -129,7 +138,7 @@ final class Classifier {
 				Plugin::STATUS_IN_USE,
 				$first['source']['name'],
 				$first['source']['slug'],
-				'high',
+				'slug' === $first['kind'] ? 'medium' : 'high',
 				$this->evidence_text( $first, count( $active ) ),
 				$group
 			);
@@ -153,7 +162,7 @@ final class Classifier {
 				Plugin::STATUS_INACTIVE,
 				$first['source']['name'],
 				$first['source']['slug'],
-				'high',
+				'slug' === $first['kind'] ? 'medium' : 'high',
 				$this->evidence_text( $first, count( $inactive ) ) . ' ' . __( 'That code is installed but not active. Delete the plugin/theme first, or allow inactive items explicitly.', 'wp-cleanup' ),
 				$group
 			);
@@ -178,9 +187,28 @@ final class Classifier {
 				Plugin::STATUS_ORPHANED,
 				$sig['name'],
 				$sig['slug'],
-				strlen( $sig['prefix'] ) >= 4 ? 'high' : 'medium',
-				/* translators: 1: prefix, 2: plugin name */
-				sprintf( __( 'Matches prefix "%1$s" of %2$s, which is not installed. No installed code references this name.', 'wp-cleanup' ), $sig['prefix'], $sig['name'] ),
+				( $sig['exact'] || strlen( $sig['prefix'] ) >= 4 ) ? 'high' : 'medium',
+				$sig['exact']
+					/* translators: %s: plugin name */
+					? sprintf( __( 'A known name used by %s, which is not installed. No installed code references this name.', 'wp-cleanup' ), $sig['name'] )
+					/* translators: 1: prefix, 2: plugin name */
+					: sprintf( __( 'Matches prefix "%1$s" of %2$s, which is not installed. No installed code references this name.', 'wp-cleanup' ), $sig['prefix'], $sig['name'] ),
+				$group
+			);
+		}
+
+		$field = '';
+		foreach ( $names as $candidate ) {
+			$field = '' !== $field ? $field : self::carbon_field( $candidate );
+		}
+		if ( '' !== $field ) {
+			return $this->result(
+				Plugin::STATUS_UNKNOWN,
+				'',
+				'',
+				'low',
+				/* translators: %s: field name */
+				sprintf( __( 'Stored in Carbon Fields format for the field "%s", which no installed plugin or theme defines by that name. A theme or plugin may build the field name dynamically, or a removed one left it behind. Review before deleting.', 'wp-cleanup' ), $field ),
 				$group
 			);
 		}
@@ -201,11 +229,19 @@ final class Classifier {
 	 * @return string
 	 */
 	private function evidence_text( array $entry, $count ) {
-		$text = $entry['by_token']
-			/* translators: 1: plugin/theme name, 2: matched prefix */
-			? sprintf( __( 'Name belongs to %1$s (prefix "%2$s").', 'wp-cleanup' ), $entry['source']['name'], $entry['match'] )
-			/* translators: 1: plugin/theme name, 2: matched literal */
-			: sprintf( __( 'Referenced in the code of %1$s ("%2$s").', 'wp-cleanup' ), $entry['source']['name'], $entry['match'] );
+		switch ( $entry['kind'] ) {
+			case 'token':
+				/* translators: 1: plugin/theme name, 2: matched prefix */
+				$text = sprintf( __( 'Name belongs to %1$s (prefix "%2$s").', 'wp-cleanup' ), $entry['source']['name'], $entry['match'] );
+				break;
+			case 'slug':
+				/* translators: 1: plugin/theme name, 2: slug */
+				$text = sprintf( __( 'Name contains the folder name of %1$s ("%2$s"), as update and license caches do. Treated as that software\'s data.', 'wp-cleanup' ), $entry['source']['name'], $entry['match'] );
+				break;
+			default:
+				/* translators: 1: plugin/theme name, 2: matched literal */
+				$text = sprintf( __( 'Referenced in the code of %1$s ("%2$s").', 'wp-cleanup' ), $entry['source']['name'], $entry['match'] );
+		}
 		if ( $count > 1 ) {
 			/* translators: %d: number of other sources */
 			$text .= ' ' . sprintf( _n( 'Also matched by %d other source.', 'Also matched by %d other sources.', $count - 1, 'wp-cleanup' ), $count - 1 );
@@ -235,6 +271,54 @@ final class Classifier {
 	public static function group_of( $name ) {
 		$parts = preg_split( '/[_\-\.:]/', ltrim( $name, '_' ), 2 );
 		return isset( $parts[0] ) && '' !== $parts[0] ? $parts[0] : $name;
+	}
+
+	/**
+	 * Every spelling of a stored name worth looking up in code, normalized first.
+	 *
+	 * Besides the stored and normalized forms this adds names that code builds
+	 * dynamically, so the literal in the code differs from the stored name:
+	 *   - Carbon Fields keys ("_hero|slide_image|1|0|value", "_footer||0|_empty")
+	 *     yield the field name defined in code ("hero", "footer").
+	 *   - Numeric suffixes ("post_by_email_address4", "x_backup_14_2_1") yield
+	 *     the base the code concatenates with an id or version.
+	 *
+	 * @param string $type Item type.
+	 * @param string $raw  Stored name.
+	 * @return string[]
+	 */
+	public static function spellings( $type, $raw ) {
+		$raw   = (string) $raw;
+		$first = self::normalize( $type, $raw );
+		$names = array( $first, $raw, ltrim( $raw, '_' ) );
+		$field = self::carbon_field( $raw );
+		if ( '' !== $field ) {
+			$names[] = $field;
+		}
+		foreach ( array( $first, $field ) as $name ) {
+			$base = preg_replace( '/(?:[_\-]?\d+)+$/', '', (string) $name );
+			if ( $base !== $name && strlen( trim( $base, '_-' ) ) >= 6 ) {
+				$names[] = rtrim( $base, '_-' );
+			}
+		}
+		return array_values( array_unique( array_filter( $names, 'strlen' ) ) );
+	}
+
+	/**
+	 * Field name of a key stored in Carbon Fields' format, or ''.
+	 *
+	 * Carbon Fields keeps complex and theme-option values as
+	 * "_{field}|{sub-field}|{index}|{group}|{property}".
+	 *
+	 * @param string $raw Stored name.
+	 */
+	public static function carbon_field( $raw ) {
+		$raw = ltrim( (string) $raw, '_' );
+		$bar = strpos( $raw, '|' );
+		if ( false === $bar || $bar < 3 || ! preg_match( '/^[A-Za-z0-9_\-]+$/', substr( $raw, 0, $bar ) ) ) {
+			return '';
+		}
+		return strtolower( substr( $raw, 0, $bar ) );
 	}
 
 	/**

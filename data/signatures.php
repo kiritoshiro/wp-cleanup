@@ -8,7 +8,11 @@
  * names: option names, table names without $wpdb->prefix, cron hooks, meta
  * keys without leading underscores, and folder names.
  *
- * Keys are the wordpress.org plugin/theme slug.
+ * Keys are the wordpress.org plugin/theme slug. Bundled libraries and retired
+ * versions use a descriptive key that no installed plugin has, so an installed
+ * successor does not claim its predecessor's leftovers.
+ *
+ * An entry ending in "$" is one exact name, not a prefix (e.g. 'e_events$').
  *
  * @package WPCleanup
  */
@@ -19,12 +23,12 @@ return array(
 	'wordpress-seo'                     => array( 'Yoast SEO', array( 'wpseo', 'yoast_', 'yoast-', 'yst_' ) ),
 	'seo-by-rank-math'                  => array( 'Rank Math SEO', array( 'rank_math', 'rank-math' ) ),
 	'all-in-one-seo-pack'               => array( 'All in One SEO', array( 'aioseo', 'aioseop' ) ),
-	'woocommerce'                       => array( 'WooCommerce', array( 'woocommerce', 'wc_', 'wc-', 'default_product_cat', 'current_theme_supports_woocommerce', 'product_cat_', 'product_tag_', 'product_shipping_class' ) ),
+	'woocommerce'                       => array( 'WooCommerce', array( 'woocommerce', 'wc_', 'wc-', 'default_product_cat', 'current_theme_supports_woocommerce', 'product_cat_', 'product_tag_', 'product_shipping_class', 'shop_catalog_image_size$', 'shop_single_image_size$', 'shop_thumbnail_image_size$' ) ),
 	'action-scheduler'                  => array( 'Action Scheduler (library bundled with WooCommerce and others)', array( 'actionscheduler', 'action_scheduler', 'schema-actionscheduler', 'as_', 'as-' ) ),
-	'elementor'                         => array( 'Elementor', array( 'elementor' ) ),
+	'elementor'                         => array( 'Elementor', array( 'elementor', 'e_events$' ) ),
 	'elementor-pro'                     => array( 'Elementor Pro', array( 'elementor_pro' ) ),
 	'wordfence'                         => array( 'Wordfence Security', array( 'wordfence', 'wf', 'wfls_', 'wflogs' ) ),
-	'jetpack'                           => array( 'Jetpack (or a plugin bundling its packages)', array( 'jetpack', 'jpsq_', 'jp_' ) ),
+	'jetpack'                           => array( 'Jetpack (or a plugin bundling its packages)', array( 'jetpack', 'jpsq_', 'jp_', 'post_by_email_address' ) ),
 	'akismet'                           => array( 'Akismet', array( 'akismet' ) ),
 	'contact-form-7'                    => array( 'Contact Form 7', array( 'wpcf7' ) ),
 	'flamingo'                          => array( 'Flamingo', array( 'flamingo' ) ),
@@ -142,4 +146,18 @@ return array(
 	'advanced-database-cleaner'         => array( 'Advanced Database Cleaner', array( 'aDBc', 'adbc_' ) ),
 	'wp-sweep'                          => array( 'WP-Sweep', array( 'wp_sweep', 'wp-sweep' ) ),
 	'ewww-image-optimizer-cloud'        => array( 'EWWW Image Optimizer Cloud', array( 'ewwwio' ) ),
+	// Verified against plugin source on 2026-09-30.
+	'wordpress-popup'                   => array( 'Hustle (WPMU DEV)', array( 'hustle', 'optins$', 'optin_meta$' ) ),
+	'wordpress-popup-legacy'            => array( 'WordPress PopUp (WPMU DEV; versions before it became Hustle)', array( 'popover_', 'popover-', 'inc_popup', 'po_active$', 'po_animation_in$', 'po_animation_out$', 'po_can_hide$', 'po_class$', 'po_close_hides$', 'po_color$', 'po_cta$', 'po_cta_label$', 'po_cta_link$', 'po_cta_target$', 'po_custom_colors$', 'po_custom_css$', 'po_custom_size$', 'po_display$', 'po_display_data$', 'po_form_submit$', 'po_heading$', 'po_hide_expire$', 'po_image$', 'po_image_mobile$', 'po_image_no_mobile$', 'po_image_pos$', 'po_inline$', 'po_no_round_corners$', 'po_order$', 'po_overlay_close$', 'po_pos$', 'po_round_corners$', 'po_rule$', 'po_rule_data$', 'po_rule_files$', 'po_scroll_body$', 'po_size$', 'po_size_height$', 'po_size_width$', 'po_style$', 'po_subtitle$', 'po_title$' ) ),
+	'wpmudev-frash'                     => array( 'WPMU DEV rating-notice library (bundled with Hustle and other WPMU DEV plugins)', array( 'wdev-frash' ) ),
+	'youtube-embed-plus'                => array( 'Embed Plus for YouTube', array( 'youtubeprefs_' ) ),
+	'wp-nested-pages'                   => array( 'Nested Pages', array( 'nestedpages_' ) ),
+	'astra-sites'                       => array( 'Starter Templates (Brainstorm Force)', array( 'astra_sites', 'astra-sites', 'ast_block_templates', 'ast-block-templates' ) ),
+	'bsf-analytics'                     => array( 'BSF Analytics (library bundled with Astra, Starter Templates and other Brainstorm Force products)', array( 'bsf_analytics' ) ),
+	'webcraftic-factory'                => array( 'Webcraftic Factory framework (bundled with Clearfy and other Webcraftic plugins)', array( 'factory_plugin_versions$' ) ),
+	'custom-post-types'                 => array( 'Custom post types, Custom Fields & more', array( 'custom_post_types_' ) ),
+	'cookiepro'                         => array( 'CookiePro', array( 'cookiepro' ) ),
+	'photo-dropper'                     => array( 'Photo Dropper (closed on wordpress.org)', array( 'pdrp_' ) ),
+	'customizr'                         => array( 'Customizr (theme)', array( 'tc-thumb-fld', 'tc_theme_options' ) ),
+	'plugin-update-checker'             => array( 'Plugin Update Checker (update cache of a plugin or theme that bundles it)', array( 'puc_external_updates_', 'external_updates-' ) ),
 );

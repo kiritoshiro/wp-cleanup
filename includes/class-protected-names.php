@@ -61,6 +61,8 @@ final class Protected_Names {
 		'/^auto_updater\.lock$/',
 		'/^core_updater\.lock$/',
 		'/^[a-z0-9_]+user_roles$/', // {$wpdb->prefix}user_roles.
+		'/^plugins_delete_result_\d+$/', // Per-user result of a bulk plugin delete.
+		'/^new_user_[A-Za-z0-9]{20}$/',  // Pending "add existing user" invitation (multisite).
 	);
 
 	const CORE_CRON_HOOKS = array(
@@ -85,6 +87,13 @@ final class Protected_Names {
 		'_wp_trash_meta_time', '_wp_user_notified', '_wp_user_request_completed_timestamp',
 		'_wp_user_request_confirmed_timestamp', '_wp_attachment_image_alt', 'enclosure', 'footnotes', 'origin',
 		'is_wp_suggestion', '_wp_note_status',
+	);
+
+	/** Post meta keys core builds dynamically. */
+	const CORE_POST_META_PATTERNS = array(
+		'/^_oembed_(time_)?[0-9a-f]{32}$/',                // oEmbed cache per embedded URL (WP_Embed).
+		'/^_format_[a-z_]+$/',                             // Post format fields (_format_url, _format_quote_source_name…).
+		'/^_wp_attachment_custom_header_last_used_.+$/', // Custom header use time per theme.
 	);
 
 	const CORE_USER_META = array(
@@ -158,7 +167,15 @@ final class Protected_Names {
 		global $wpdb;
 		switch ( $meta_type ) {
 			case 'post':
-				return in_array( $key, self::CORE_POST_META, true );
+				if ( in_array( $key, self::CORE_POST_META, true ) ) {
+					return true;
+				}
+				foreach ( self::CORE_POST_META_PATTERNS as $pattern ) {
+					if ( preg_match( $pattern, $key ) ) {
+						return true;
+					}
+				}
+				return false;
 			case 'term':
 				return in_array( $key, self::CORE_TERM_META, true );
 			case 'comment':

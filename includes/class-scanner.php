@@ -168,7 +168,7 @@ final class Scanner {
 		);
 		foreach ( (array) $rows as $row ) {
 			$name  = $row['option_name'];
-			$class = Protected_Names::is_core_option( $name ) ? $this->core() : $this->classifier->classify( array( $name, ltrim( $name, '_' ) ) );
+			$class = Protected_Names::is_core_option( $name ) ? $this->core() : $this->classifier->classify( Classifier::spellings( 'option', $name ) );
 			yield $this->item(
 				'option',
 				$name,
@@ -194,7 +194,7 @@ final class Scanner {
 			   AND option_name NOT LIKE '\_transient\_timeout\_%' AND option_name NOT LIKE '\_site\_transient\_timeout\_%'",
 			ARRAY_A
 		);
-		$core_transients = array( 'doing_cron', 'update_core', 'update_plugins', 'update_themes', 'theme_roots', 'wp_theme_files_patterns', 'health-check-site-status-result', 'dirsize_cache', 'wp_core_block_css_files', 'wp_styles_for_blocks', 'available_translations', 'poptags', 'browser', 'php_check', 'wp_font_collections', 'is_multi_author', 'plugin_slugs', 'mailserver_last_checked', 'wp_remote_block_patterns', 'feed', 'feed_mod', 'dash', 'community-events', 'global_styles', 'wp_rest_api_cache', 'wp_block_patterns', 'wp_theme_json', 'wp_core_block', 'settings_errors', 'random_seed', 'wp_update_https', 'wp_sites_hash' );
+		$core_transients = array( 'doing_cron', 'update_core', 'update_plugins', 'update_themes', 'theme_roots', 'wp_theme_files_patterns', 'health-check-site-status-result', 'dirsize_cache', 'wp_core_block_css_files', 'wp_styles_for_blocks', 'available_translations', 'poptags', 'browser', 'php_check', 'wp_font_collections', 'is_multi_author', 'plugin_slugs', 'mailserver_last_checked', 'wp_remote_block_patterns', 'feed', 'feed_mod', 'dash', 'community-events', 'global_styles', 'wp_rest_api_cache', 'wp_block_patterns', 'wp_theme_json', 'wp_core_block', 'settings_errors', 'random_seed', 'wp_update_https', 'wp_sites_hash', 'popular_importers', 'wordpress_credits', 'scrape_key', 'rss', 'oembed' );
 
 		foreach ( (array) $rows as $row ) {
 			$name = $row['option_name'];
@@ -264,7 +264,7 @@ final class Scanner {
 			}
 			$rows = (int) $row['Rows'];
 			if ( ! $class ) {
-				$class = $this->classifier->classify( array( Classifier::normalize( 'table', $table ), $table ) );
+				$class = $this->classifier->classify( Classifier::spellings( 'table', $table ) );
 				// InnoDB's Rows is an estimate (often 0); count candidates exactly unless huge.
 				if ( $rows < 1000000 ) {
 					$rows = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM `' . Backup::ident( $table ) . '`' ); // phpcs:ignore
@@ -301,7 +301,7 @@ final class Scanner {
 				$class = $this->core();
 			} else {
 				$runtime = has_action( $hook ) ? __( 'a callback is hooked to this event', 'wp-cleanup' ) : null;
-				$class   = $this->classifier->classify( array( $hook ), $runtime );
+				$class   = $this->classifier->classify( Classifier::spellings( 'cron', $hook ), $runtime );
 			}
 			yield $this->item( 'cron', $hook, $hook, $class, array( 'count' => $count ) );
 		}
@@ -328,7 +328,7 @@ final class Scanner {
 				}
 				$class = Protected_Names::is_core_meta( $meta_type, $key )
 					? $this->core()
-					: $this->classifier->classify( array( Classifier::normalize( 'meta', $key ), $key ) );
+					: $this->classifier->classify( Classifier::spellings( 'meta', $key ) );
 				yield $this->item(
 					'meta',
 					$meta_type . ':' . $key,
