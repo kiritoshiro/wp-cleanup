@@ -158,6 +158,11 @@ final class Media_Remover {
 			foreach ( (array) get_post_meta( (int) $row->post_id, '_wp_attachment_backup_sizes', true ) as $size ) {
 				$names[] = is_array( $size ) && isset( $size['file'] ) ? $size['file'] : '';
 			}
+			$outputs = get_post_meta( (int) $row->post_id, Media_Policy::OUTPUT_META, true );
+			if ( is_array( $outputs ) ) {
+				$names[] = isset( $outputs['avif_full'] ) ? $outputs['avif_full'] : '';
+				$names[] = isset( $outputs['avif_small'] ) ? $outputs['avif_small'] : '';
+			}
 			foreach ( array_filter( $names ) as $name ) {
 				if ( isset( $wanted[ strtolower( ltrim( $rel_dir . '/' . wp_basename( $name ), '/' ) ) ] ) ) {
 					return true;

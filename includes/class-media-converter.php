@@ -1,15 +1,10 @@
 <?php
 /**
- * Converts one image attachment to the two-size AVIF policy.
+ * Replace an image attachment with one JPEG and optional AVIF alternatives.
  *
- * Order of operations, each step reversible until the end:
- *   1. Encode the new full AVIF (and small AVIF) next to the old files.
- *   2. Verify both files decode with the expected dimensions and MIME type.
- *   3. Plan every URL rewrite in content/meta/options (nothing written yet).
- *   4. Write before-images of every value that will change into the backup set.
- *   5. Update the attachment and the rewritten rows.
- *   6. Move every old file into the backup set.
- * Any failure rolls back what was done so far.
+ * New files are encoded and verified before database changes. References are
+ * then rewritten to the JPEG, before-images are saved, and old files are moved
+ * to the backup set. A failure rolls the image back.
  *
  * @package WPCleanup
  */
@@ -21,7 +16,7 @@ defined( 'ABSPATH' ) || exit;
 final class Media_Converter {
 
 	/** Attachment meta keys whose before-images are kept. */
-	const META_KEYS = array( '_wp_attached_file', '_wp_attachment_metadata', '_wp_attachment_backup_sizes', Media_Policy::ALPS_FLAG, '_alps_original_delete_after', '_alps_retained_original' );
+	const META_KEYS = array( '_wp_attached_file', '_wp_attachment_metadata', '_wp_attachment_backup_sizes', Media_Policy::OUTPUT_META, Media_Policy::ALPS_FLAG, '_alps_original_delete_after', '_alps_retained_original' );
 
 	/**
 	 * @param int         $id      Attachment id.
@@ -58,22 +53,22 @@ final class Media_Converter {
 		$result['bytes_before'] = $inv['bytes'];
 		if ( $inv['compliant'] ) {
 			$result['status']  = 'compliant';
-			$result['message'] = __( 'Already one AVIF within the size limits.', 'wp-cleanup' );
+			$result['message'] = __( 'Already follows the image policy.', 'wp-cleanup' );
 			return $result;
 		}
 		if ( $dry_run ) {
 			$result['status'] = 'planned';
 			/* translators: %d: files */
-			$result['message'] = sprintf( __( '%d file(s) would be replaced by at most two AVIF files.', 'wp-cleanup' ), count( $inv['files'] ) );
+			$result['message'] = sprintf( __( '%d file(s) would be replaced by one JPEG fallback and up to two AVIF files.', 'wp-cleanup' ), count( $inv['files'] ) );
 			return $result;
 		}
 		if ( ! $backup instanceof Backup ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( __( 'Images are only converted into a backup set.', 'wp-cleanup' ) );
 		}
-		if ( ! Media_Policy::avif_supported() ) {
+		if ( ! Media_Policy::jpeg_supported() ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( __( 'This server cannot write AVIF images.', 'wp-cleanup' ) );
+			throw new \RuntimeException( __( 'This server cannot write JPEG images.', 'wp-cleanup' ) );
 		}
 
 		$created = array();
@@ -81,32 +76,39 @@ final class Media_Converter {
 		$n       = null;
 		$applied = false;
 		try {
-			// 1–2. Encode and verify.
-			list( $full, $small, $rotated ) = self::encode( $id, $inv, $s, $created );
+			// Keep one JPEG as the attachment file so direct URLs work on older devices.
+			list( $jpeg, $rotated ) = self::encode_jpeg( $id, $inv, $s, $created );
+			$full = null;
+			$small = null;
+			$avif_error = '';
+			if ( Media_Policy::avif_supported() ) {
+				$avif_created = array();
+				try {
+					list( $full, $small ) = self::encode_avif( $id, $inv, $s, $avif_created );
+					$created = array_merge( $created, $avif_created );
+				} catch ( \Exception $e ) {
+					$avif_error = $e->getMessage();
+					foreach ( $avif_created as $path ) {
+						if ( is_file( $path ) ) {
+							@unlink( $path ); // phpcs:ignore -- Incomplete new output.
+						}
+					}
+				}
+			} else {
+				$avif_error = __( 'This server cannot write AVIF images.', 'wp-cleanup' );
+			}
 
-			// 3. Map every old file to the file that replaces it, and plan rewrites.
-			$full_name  = wp_basename( $full['path'] );
-			$small_name = $small ? wp_basename( $small['path'] ) : null;
-			$map        = array();
-			$needles    = array();
-			$remove     = array();
+			// Every old URL becomes the JPEG fallback. AVIF is used in picture markup.
+			$jpeg_name = wp_basename( $jpeg['path'] );
+			$map = array();
+			$needles = array();
+			$remove = array();
 			foreach ( $inv['files'] as $name => $file ) {
-				if ( $name === $full_name ) {
-					continue; // The source is reused as the new full image.
-				}
 				$remove[ $name ] = $file;
-				$target          = $full_name;
-				if ( $small_name && in_array( $file['role'], array( 'size', 'stray', 'backup' ), true ) && $file['width'] && $file['height'] && max( $file['width'], $file['height'] ) <= $s['small_max'] ) {
-					$target = $small_name;
-				}
-				$map[ Reference_Rewriter::key( $inv['rel_dir'], $name ) ] = Reference_Rewriter::key( $inv['rel_dir'], $target );
-
+				$map[ Reference_Rewriter::key( $inv['rel_dir'], $name ) ] = Reference_Rewriter::key( $inv['rel_dir'], $jpeg_name );
 				$needles[ Reference_Rewriter::key( $inv['rel_dir'], Media_Inventory::base_name( $name ) ) ] = true;
 			}
-			$widths = array( Reference_Rewriter::key( $inv['rel_dir'], $full_name ) => $full['width'] );
-			if ( $small ) {
-				$widths[ Reference_Rewriter::key( $inv['rel_dir'], $small_name ) ] = $small['width'];
-			}
+			$widths = array( Reference_Rewriter::key( $inv['rel_dir'], $jpeg_name ) => $jpeg['width'] );
 			$rewriter = new Reference_Rewriter( $map, $widths );
 			$changes  = $rewriter->plan( array_keys( $needles ), $id );
 			$reference_changes = self::reference_changes( $changes, $map );
@@ -128,7 +130,7 @@ final class Media_Converter {
 			// 5. Apply.
 			$applied = true;
 			Reference_Rewriter::apply( $changes );
-			self::update_attachment( $id, $inv, $full, $small, $rotated, $s );
+			self::update_attachment( $id, $inv, $jpeg, $full, $small, $rotated, $s, $avif_error );
 
 			// 6. Move old files into the backup set.
 			$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
@@ -165,7 +167,7 @@ final class Media_Converter {
 				)
 			);
 
-			$after = (int) filesize( $full['path'] ) + ( $small ? (int) filesize( $small['path'] ) : 0 );
+			$after = (int) filesize( $jpeg['path'] ) + ( $full ? (int) filesize( $full['path'] ) : 0 ) + ( $small ? (int) filesize( $small['path'] ) : 0 );
 			$backup->set_result( $n, 'deleted', sprintf( '%d file(s) replaced; %d reference(s) rewritten', count( $remove ), count( $changes ) ) );
 
 			$result['status']      = 'converted';
@@ -180,6 +182,9 @@ final class Media_Converter {
 				size_format( $after, 1 ),
 				count( $changes )
 			);
+			if ( $avif_error ) {
+				$result['message'] .= ' ' . sprintf( __( 'The JPEG fallback is active; AVIF could not be made: %s', 'wp-cleanup' ), $avif_error );
+			}
 			return $result;
 		} catch ( \Exception $e ) {
 			self::rollback( $id, $backup, $n, $applied, $created, $moved, $inv );
@@ -195,13 +200,17 @@ final class Media_Converter {
 	/** Explain each rewritten row and its old and new image paths. */
 	private static function reference_changes( array $changes, array $map ) {
 		$out = array();
+		global $wpdb;
 		foreach ( $changes as $change ) {
-			$where = $change['table'] . ' #' . $change['id'] . ' · ' . $change['column'];
-			foreach ( array( 'post_title', 'option_name', 'meta_key' ) as $label ) {
-				if ( ! empty( $change['row'][ $label ] ) ) {
-					$where .= ' (' . wp_html_excerpt( (string) $change['row'][ $label ], 100 ) . ')';
-					break;
-				}
+			$row = $change['row'];
+			if ( $wpdb->posts === $change['table'] ) {
+				$where = sprintf( __( 'Post: %1$s (#%2$s), %3$s', 'wp-cleanup' ), wp_html_excerpt( (string) $row['post_title'], 100 ), $change['id'], $change['column'] );
+			} elseif ( $wpdb->options === $change['table'] ) {
+				$where = sprintf( __( 'Site option: %1$s (#%2$s)', 'wp-cleanup' ), $row['option_name'], $change['id'] );
+			} elseif ( isset( $row['meta_key'] ) ) {
+				$where = sprintf( __( 'Metadata: %1$s (#%2$s in %3$s)', 'wp-cleanup' ), $row['meta_key'], $change['id'], $change['table'] );
+			} else {
+				$where = $change['table'] . ' #' . $change['id'] . ' · ' . $change['column'];
 			}
 			$found = false;
 			foreach ( $map as $from => $to ) {
@@ -212,71 +221,121 @@ final class Media_Converter {
 				$found = true;
 			}
 			if ( ! $found ) {
-				$out[] = array( 'where' => $where, 'from' => __( 'Image width descriptors', 'wp-cleanup' ), 'to' => __( 'Actual AVIF widths', 'wp-cleanup' ) );
+				$out[] = array( 'where' => $where, 'from' => __( 'Image width descriptors', 'wp-cleanup' ), 'to' => __( 'Actual JPEG width', 'wp-cleanup' ) );
 			}
 		}
 		return $out;
 	}
 
-	/**
-	 * @return array{0:array,1:array|null,2:bool} full, small, rotated.
-	 * @throws \RuntimeException On failure.
-	 */
-	private static function encode( $id, array $inv, array $s, array &$created ) {
-		wp_raise_memory_limit( 'image' );
-		$attached = wp_normalize_path( get_attached_file( $id, true ) );
-		$meta     = $inv['meta'];
-		// Best-quality source: the pre-"-scaled" original, unless the image was edited in WordPress.
-		$source = $attached;
-		if ( ! $inv['edited'] && ! empty( $meta['original_image'] ) && is_file( $inv['dir'] . '/' . wp_basename( $meta['original_image'] ) ) ) {
-			$source = $inv['dir'] . '/' . wp_basename( $meta['original_image'] );
+	/** Select the best original image available for both encoders. */
+	private static function source( $id, array $inv ) {
+		$source = wp_normalize_path( get_attached_file( $id, true ) );
+		if ( ! $inv['edited'] && ! empty( $inv['meta']['original_image'] ) && is_file( $inv['dir'] . '/' . wp_basename( $inv['meta']['original_image'] ) ) ) {
+			$source = $inv['dir'] . '/' . wp_basename( $inv['meta']['original_image'] );
 		}
+		return $source;
+	}
 
+	/** Make exactly one optimized JPEG, with no generated JPEG sub-sizes. */
+	private static function encode_jpeg( $id, array $inv, array $s, array &$created ) {
+		wp_raise_memory_limit( 'image' );
+		$source = self::source( $id, $inv );
 		$editor = wp_get_image_editor( $source );
 		if ( is_wp_error( $editor ) ) {
-			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( $editor->get_error_message() );
+			throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 		}
 		$rotated = method_exists( $editor, 'maybe_exif_rotate' ) ? $editor->maybe_exif_rotate() : false;
 		if ( is_wp_error( $rotated ) ) {
-			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( $rotated->get_error_message() );
+			throw new \RuntimeException( $rotated->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 		}
-		$size   = $editor->get_size();
-		$resize = max( $size['width'], $size['height'] ) > $s['full_max'];
-
-		if ( 'image/avif' === wp_get_image_mime( $source ) && ! $resize && true !== $rotated ) {
-			$full = array(
-				'path'   => $source,
-				'width'  => $size['width'],
-				'height' => $size['height'],
-			);
-		} else {
-			if ( $resize && is_wp_error( $err = $editor->resize( $s['full_max'], $s['full_max'], false ) ) ) { // phpcs:ignore
-				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( $err->get_error_message() );
+		$size = $editor->get_size();
+		if ( max( $size['width'], $size['height'] ) > $s['jpeg_max'] ) {
+			$err = $editor->resize( $s['jpeg_max'], $s['jpeg_max'], false );
+			if ( is_wp_error( $err ) ) {
+				throw new \RuntimeException( $err->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
-			$full = self::save( $editor, $inv['dir'], $inv['base'] . '.avif', $created );
 		}
-		self::verify( $full );
+		$editor->set_quality( $s['jpeg_quality'] );
+		$jpeg = self::save( $editor, $inv['dir'], $inv['base'] . '-fallback.jpg', $created, 'image/jpeg' );
+		$mime = wp_get_image_mime( $source );
+		$load = 'image/png' === $mime ? 'imagecreatefrompng' : ( 'image/avif' === $mime ? 'imagecreatefromavif' : '' );
+		$canvas = null;
+		if ( $load && function_exists( $load ) ) {
+			$transparent = @$load( $source ); // phpcs:ignore -- The editor already decoded this local file.
+			if ( $transparent ) {
+				$canvas = imagecreatetruecolor( $jpeg['width'], $jpeg['height'] );
+				imagefill( $canvas, 0, 0, imagecolorallocate( $canvas, 255, 255, 255 ) );
+				imagealphablending( $canvas, true );
+				imagecopyresampled( $canvas, $transparent, 0, 0, 0, 0, $jpeg['width'], $jpeg['height'], imagesx( $transparent ), imagesy( $transparent ) );
+				imagedestroy( $transparent );
+				if ( ! imagejpeg( $canvas, $jpeg['path'], $s['jpeg_quality'] ) ) {
+					imagedestroy( $canvas );
+					throw new \RuntimeException( __( 'Could not save the JPEG fallback.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+			}
+		}
+		self::verify( $jpeg, 'image/jpeg' );
+		// Lower quality when needed to make the fallback smaller than its source.
+		foreach ( array( 72, 62 ) as $quality ) {
+			if ( (int) filesize( $jpeg['path'] ) < (int) filesize( $source ) || $quality >= $s['jpeg_quality'] ) {
+				break;
+			}
+			if ( $canvas ) {
+				if ( ! imagejpeg( $canvas, $jpeg['path'], $quality ) ) {
+					imagedestroy( $canvas );
+					throw new \RuntimeException( __( 'Could not optimize the JPEG fallback.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+			} else {
+				$editor->set_quality( $quality );
+				$retry = $editor->save( $jpeg['path'], 'image/jpeg' );
+				if ( is_wp_error( $retry ) ) {
+					throw new \RuntimeException( $retry->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+			}
+			self::verify( $jpeg, 'image/jpeg' );
+		}
+		if ( $canvas ) {
+			imagedestroy( $canvas );
+		}
+		return array( $jpeg, true === $rotated );
+	}
+
+	/** Make a full AVIF and, when needed, one small AVIF. */
+	private static function encode_avif( $id, array $inv, array $s, array &$created ) {
+		$source = self::source( $id, $inv );
+		$editor = wp_get_image_editor( $source );
+		if ( is_wp_error( $editor ) ) {
+			throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+		}
+		$rotated = method_exists( $editor, 'maybe_exif_rotate' ) ? $editor->maybe_exif_rotate() : false;
+		if ( is_wp_error( $rotated ) ) {
+			throw new \RuntimeException( $rotated->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+		}
+		$size = $editor->get_size();
+		if ( max( $size['width'], $size['height'] ) > $s['full_max'] ) {
+			$err = $editor->resize( $s['full_max'], $s['full_max'], false );
+			if ( is_wp_error( $err ) ) {
+				throw new \RuntimeException( $err->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+			}
+		}
+		$full = self::save( $editor, $inv['dir'], $inv['base'] . '.avif', $created, 'image/avif' );
+		self::verify( $full, 'image/avif' );
 
 		$small = null;
 		if ( max( $full['width'], $full['height'] ) > $s['small_max'] ) {
 			$editor = wp_get_image_editor( $full['path'] );
 			if ( is_wp_error( $editor ) ) {
-				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( $editor->get_error_message() );
+				throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
 			$err = $editor->resize( $s['small_max'], $s['small_max'], false );
 			if ( is_wp_error( $err ) ) {
-				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( $err->get_error_message() );
+				throw new \RuntimeException( $err->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
-			$dims  = $editor->get_size();
-			$small = self::save( $editor, $inv['dir'], $inv['base'] . '-' . $dims['width'] . 'x' . $dims['height'] . '.avif', $created );
-			self::verify( $small );
+			$dims = $editor->get_size();
+			$small = self::save( $editor, $inv['dir'], $inv['base'] . '-' . $dims['width'] . 'x' . $dims['height'] . '.avif', $created, 'image/avif' );
+			self::verify( $small, 'image/avif' );
 		}
-		return array( $full, $small, true === $rotated );
+		return array( $full, $small );
 	}
 
 	/**
@@ -284,14 +343,18 @@ final class Media_Converter {
 	 * @param string           $dir     Folder.
 	 * @param string           $name    Desired file name.
 	 * @param array            $created Created paths (by reference).
+	 * @param string           $mime    Output MIME type.
 	 * @return array{path:string,width:int,height:int}
 	 */
-	private static function save( $editor, $dir, $name, array &$created ) {
-		// A JPEG or PNG with the same stem is expected; only an existing AVIF must force a new name.
+	private static function save( $editor, $dir, $name, array &$created, $mime ) {
+		// Only an existing file with the same output extension forces a new name.
 		$name  = sanitize_file_name( $name );
 		$dest  = $dir . '/' . ( file_exists( $dir . '/' . $name ) ? wp_unique_filename( $dir, $name ) : $name );
-		$saved = $editor->save( $dest, 'image/avif' );
+		$saved = $editor->save( $dest, $mime );
 		if ( is_wp_error( $saved ) ) {
+			if ( is_file( $dest ) ) {
+				@unlink( $dest ); // phpcs:ignore -- Remove a partial new file after an encoder error.
+			}
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 			throw new \RuntimeException( $saved->get_error_message() );
 		}
@@ -305,24 +368,25 @@ final class Media_Converter {
 
 	/**
 	 * @param array $file path, width, height.
-	 * @throws \RuntimeException When the file is not a readable AVIF of that size.
+	 * @param string $mime Expected MIME type.
+	 * @throws \RuntimeException When the file cannot be decoded at that size.
 	 */
-	private static function verify( array $file ) {
+	private static function verify( array $file, $mime ) {
 		clearstatcache( true, $file['path'] );
 		$info = is_file( $file['path'] ) && filesize( $file['path'] ) > 0 ? wp_getimagesize( $file['path'] ) : false;
-		$verified = $info && 'image/avif' === ( isset( $info['mime'] ) ? $info['mime'] : '' ) && (int) $info[0] === (int) $file['width'] && (int) $info[1] === (int) $file['height'];
+		$verified = $info && $mime === ( isset( $info['mime'] ) ? $info['mime'] : '' ) && (int) $info[0] === (int) $file['width'] && (int) $info[1] === (int) $file['height'];
 		// Some valid AVIF variants are not understood by PHP's header parser. Decode the image before refusing it.
-		if ( ! $verified && is_file( $file['path'] ) && 'image/avif' === wp_get_image_mime( $file['path'] ) ) {
+		if ( ! $verified && is_file( $file['path'] ) && $mime === wp_get_image_mime( $file['path'] ) ) {
 			$editor = wp_get_image_editor( $file['path'] );
 			if ( ! is_wp_error( $editor ) ) {
 				$size = $editor->get_size();
 				$verified = is_array( $size ) && (int) $size['width'] === (int) $file['width'] && (int) $size['height'] === (int) $file['height'];
 			}
 		}
-		if ( ! $verified ) {
-			/* translators: %s: file */
+		if ( ! apply_filters( 'wp_cleanup_media_verify', $verified, $file, $mime ) ) {
+			/* translators: 1: MIME type, 2: file */
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'The new AVIF file %s could not be decoded with the expected dimensions. The original image was kept.', 'wp-cleanup' ), wp_basename( $file['path'] ) ) );
+			throw new \RuntimeException( sprintf( __( 'The new %1$s file %2$s could not be decoded with the expected dimensions.', 'wp-cleanup' ), $mime, wp_basename( $file['path'] ) ) );
 		}
 	}
 
@@ -344,41 +408,39 @@ final class Media_Converter {
 		}
 	}
 
-	private static function update_attachment( $id, array $inv, array $full, $small, $rotated, array $s ) {
+	private static function update_attachment( $id, array $inv, array $jpeg, $full, $small, $rotated, array $s, $avif_error ) {
 		global $wpdb;
-		$meta             = $inv['meta'];
-		// Compute the uploads-relative path ourselves: _wp_relative_upload_path() compares raw strings,
-		// so on Windows "C:/…" (normalized) never matches a "C:\…" basedir and an absolute path is stored.
-		$relative         = self::rel( $full['path'] );
-		$meta['file']     = $relative;
-		$meta['width']    = $full['width'];
-		$meta['height']   = $full['height'];
-		$meta['filesize'] = (int) filesize( $full['path'] );
-		$meta['sizes']    = array();
-		if ( $small ) {
-			$meta['sizes'][ $s['small_name'] ] = array(
-				'file'      => wp_basename( $small['path'] ),
-				'width'     => $small['width'],
-				'height'    => $small['height'],
-				'mime-type' => 'image/avif',
-				'filesize'  => (int) filesize( $small['path'] ),
-			);
-		}
+		$meta = $inv['meta'];
+		// Compute this path ourselves because Windows path separators differ from WordPress strings.
+		$relative = self::rel( $jpeg['path'] );
+		$meta['file'] = $relative;
+		$meta['width'] = $jpeg['width'];
+		$meta['height'] = $jpeg['height'];
+		$meta['filesize'] = (int) filesize( $jpeg['path'] );
+		$meta['sizes'] = array();
 		unset( $meta['original_image'] );
 		if ( $rotated ) {
 			$meta['image_meta']['orientation'] = 1;
 		}
-
-		update_attached_file( $id, $relative ); // Already relative, so it is stored as given.
-		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $full['path'] ) {
-			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( __( 'The new file path could not be stored correctly.', 'wp-cleanup' ) );
+		$outputs = array(
+			'jpeg' => $relative,
+			'avif_full' => $full ? self::rel( $full['path'] ) : '',
+			'avif_full_width' => $full ? $full['width'] : 0,
+			'avif_small' => $small ? self::rel( $small['path'] ) : '',
+			'avif_small_width' => $small ? $small['width'] : 0,
+			'avif_error' => $avif_error,
+			'policy' => $s,
+		);
+		update_attached_file( $id, $relative );
+		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $jpeg['path'] ) {
+			throw new \RuntimeException( __( 'The new file path could not be stored correctly.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 		}
-		$wpdb->update( $wpdb->posts, array( 'post_mime_type' => 'image/avif' ), array( 'ID' => $id ) );
+		$wpdb->update( $wpdb->posts, array( 'post_mime_type' => 'image/jpeg' ), array( 'ID' => $id ) );
 		delete_post_meta( $id, '_wp_attachment_backup_sizes' );
 		if ( $s['set_flag'] ) {
 			update_post_meta( $id, Media_Policy::ALPS_FLAG, 1 );
 		}
+		update_post_meta( $id, Media_Policy::OUTPUT_META, $outputs );
 		wp_update_attachment_metadata( $id, $meta );
 		clean_post_cache( $id );
 	}
@@ -451,7 +513,7 @@ final class Media_Converter {
 			}
 		}
 
-		// Old files back first: harmless while the AVIFs still exist.
+		// Old files back first: harmless while the new images still exist.
 		foreach ( $moved as $rel ) {
 			if ( ! @rename( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore
 				/* translators: %s: file */
@@ -460,7 +522,7 @@ final class Media_Converter {
 			}
 		}
 		$backup->replay_sql( $n );
-		// The AVIFs are now unused; park them in the backup set instead of deleting.
+		// The new images are now unused; park them in the backup set instead of deleting.
 		$parked = $backup->dir . '/files/' . (int) $n . '/created';
 		foreach ( (array) ( isset( $extra['created'] ) ? $extra['created'] : array() ) as $rel ) {
 			if ( is_file( $uploads . '/' . $rel ) ) {

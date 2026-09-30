@@ -254,7 +254,7 @@ final class CLI {
 	}
 
 	/**
-	 * Convert images to AVIF (full + one small size) and move every other size into a backup set.
+	 * Convert images to one JPEG fallback and up to two AVIF files and move every other size into a backup set.
 	 *
 	 * ## OPTIONS
 	 *
@@ -294,7 +294,7 @@ final class CLI {
 		$s = Media_Policy::settings();
 		if ( 'status' === $args[0] ) {
 			$r = Media_Report::build_and_store();
-			\WP_CLI::log( sprintf( 'Policy: AVIF full <= %dpx + "%s" <= %dpx%s. AVIF support: %s.', $s['full_max'], $s['small_name'], $s['small_max'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
+			\WP_CLI::log( sprintf( 'Policy: one JPEG <= %dpx (quality %d), AVIF full <= %dpx + "%s" <= %dpx%s. AVIF support: %s.', $s['jpeg_max'], $s['jpeg_quality'], $s['full_max'], $s['small_name'], $s['small_max'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
 			\WP_CLI::log( sprintf( '%d images: %d to convert (%d files, %s, incl. %d stray files %s), %d already compliant, %d skipped.', $r['total'], $r['eligible'], $r['files'], size_format( $r['bytes'], 1 ), $r['strays'], size_format( $r['stray_b'], 1 ), $r['compliant'], $r['skipped'] ) );
 			foreach ( $r['reasons'] as $reason => $count ) {
 				\WP_CLI::log( sprintf( '  skipped %d: %s', $count, $reason ) );
@@ -340,8 +340,8 @@ final class CLI {
 		}
 		$dry = (bool) \WP_CLI\Utils\get_flag_value( $assoc, 'dry-run', false );
 		if ( ! $dry ) {
-			if ( ! Media_Policy::avif_supported() ) {
-				\WP_CLI::error( 'This server cannot write AVIF images (needs WordPress 6.5+ and AVIF-capable GD or Imagick).' );
+			if ( ! Media_Policy::jpeg_supported() ) {
+				\WP_CLI::error( 'This server cannot write JPEG images.' );
 			}
 			\WP_CLI::confirm( sprintf( 'Convert %d image(s)? Old files are moved into a backup set.', count( $ids ) ), $assoc );
 		}
@@ -366,7 +366,7 @@ final class CLI {
 		wp_cache_flush();
 		Media_Report::forget( $ids );
 		$msg = sprintf(
-			'Converted %d, failed %d. %s of old files moved into backup set %s; new AVIF files use %s. Delete that set (wp cleanup delete-backup %s) once the site looks right to free the space.',
+			'Converted %d, failed %d. %s of old files moved into backup set %s; new JPEG and AVIF files use %s. Delete that set (wp cleanup delete-backup %s) once the site looks right to free the space.',
 			$tally['converted'],
 			$tally['failed'],
 			size_format( $tally['before'], 1 ),

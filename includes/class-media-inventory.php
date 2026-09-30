@@ -62,6 +62,14 @@ final class Media_Inventory {
 				$add( $size['file'], 'size', (string) $name, isset( $size['width'] ) ? $size['width'] : 0, isset( $size['height'] ) ? $size['height'] : 0 );
 			}
 		}
+		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+		if ( is_array( $outputs ) ) {
+			foreach ( array( 'avif_full', 'avif_small' ) as $variant ) {
+				if ( ! empty( $outputs[ $variant ] ) ) {
+					$add( $outputs[ $variant ], $variant );
+				}
+			}
+		}
 		$backups = get_post_meta( $id, '_wp_attachment_backup_sizes', true );
 		foreach ( (array) $backups as $name => $size ) {
 			if ( is_array( $size ) && ! empty( $size['file'] ) ) {
@@ -114,7 +122,7 @@ final class Media_Inventory {
 	}
 
 	/**
-	 * Already in the target shape: one AVIF full within limits, at most the small size, nothing else.
+	 * Already in the target shape: one JPEG and optional recorded AVIF alternatives.
 	 *
 	 * @param int   $id    Attachment id.
 	 * @param array $meta  Metadata.
@@ -122,25 +130,30 @@ final class Media_Inventory {
 	 */
 	private static function is_compliant( $id, array $meta, array $files ) {
 		$s = Media_Policy::settings();
-		if ( 'image/avif' !== get_post_mime_type( $id ) || ! empty( $meta['original_image'] ) ) {
-			return false;
-		}
-		if ( max( (int) ( isset( $meta['width'] ) ? $meta['width'] : 0 ), (int) ( isset( $meta['height'] ) ? $meta['height'] : 0 ) ) > $s['full_max'] ) {
-			return false;
-		}
-		$sizes = isset( $meta['sizes'] ) ? (array) $meta['sizes'] : array();
-		if ( array_diff( array_keys( $sizes ), array( $s['small_name'] ) ) ) {
-			return false;
-		}
-		foreach ( $files as $file ) {
-			if ( ! in_array( $file['role'], array( 'attached', 'size' ), true ) ) {
+		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+		if ( is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
+			if ( 'image/jpeg' !== get_post_mime_type( $id ) || ! empty( $meta['original_image'] ) || ! empty( $meta['sizes'] ) || ( ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) ) ) {
 				return false;
 			}
+			if ( $outputs['policy'] != $s || (string) $outputs['jpeg'] !== (string) $meta['file'] ) { // phpcs:ignore -- compare policy arrays.
+				return false;
+			}
+			if ( ! isset( $files[ wp_basename( $outputs['jpeg'] ) ] ) || max( (int) $meta['width'], (int) $meta['height'] ) > $s['jpeg_max'] ) {
+				return false;
+			}
+			foreach ( array( 'avif_full', 'avif_small' ) as $variant ) {
+				if ( ! empty( $outputs[ $variant ] ) && ! isset( $files[ wp_basename( $outputs[ $variant ] ) ] ) ) {
+					return false;
+				}
+			}
+			foreach ( $files as $file ) {
+				if ( ! in_array( $file['role'], array( 'attached', 'avif_full', 'avif_small' ), true ) ) {
+					return false;
+				}
+			}
+			return ! $s['set_flag'] || get_post_meta( $id, Media_Policy::ALPS_FLAG, true );
 		}
-		if ( $s['set_flag'] && ! get_post_meta( $id, Media_Policy::ALPS_FLAG, true ) ) {
-			return false;
-		}
-		return true;
+		return false;
 	}
 
 	/**
@@ -150,7 +163,7 @@ final class Media_Inventory {
 	 */
 	public static function base_name( $file ) {
 		$name = pathinfo( wp_basename( (string) $file ), PATHINFO_FILENAME );
-		$name = preg_replace( '/-scaled$/', '', $name );
+		$name = preg_replace( '/-(?:scaled|fallback)$/', '', $name );
 		return preg_replace( '/-e\d{10,14}$/', '', $name );
 	}
 
@@ -214,6 +227,11 @@ final class Media_Inventory {
 			}
 			foreach ( (array) get_post_meta( (int) $row->post_id, '_wp_attachment_backup_sizes', true ) as $size ) {
 				$names[] = is_array( $size ) && isset( $size['file'] ) ? $size['file'] : '';
+			}
+			$outputs = get_post_meta( (int) $row->post_id, Media_Policy::OUTPUT_META, true );
+			if ( is_array( $outputs ) ) {
+				$names[] = isset( $outputs['avif_full'] ) ? $outputs['avif_full'] : '';
+				$names[] = isset( $outputs['avif_small'] ) ? $outputs['avif_small'] : '';
 			}
 			foreach ( array_filter( $names ) as $name ) {
 				$out[ strtolower( wp_basename( $name ) ) ] = true;

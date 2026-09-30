@@ -90,3 +90,7 @@
 .wpcu-result details ul { max-height: 240px; overflow: auto; padding-left: 18px; margin: 4px 0; }
 .wpcu-result details li { margin: 3px 0; overflow-wrap: anywhere; }
 .wpcu-details li { overflow-wrap: anywhere; }
+
+.wpcu-reference-change { border-bottom: 1px solid #dcdcde; padding: 6px 0 8px; }
+.wpcu-reference-change > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 4px; margin-top: 3px; }
+.wpcu-reference-change span, .wpcu-reference-change code { overflow-wrap: anywhere; word-break: break-word; }

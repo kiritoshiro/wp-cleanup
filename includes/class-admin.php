@@ -52,9 +52,12 @@ final class Admin {
 				'nothing'        => __( 'Select at least one item.', 'wp-cleanup' ),
 				'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
 				'mediaNonce'     => wp_create_nonce( 'wpcu_media_batch' ),
-				'confirmMedia'   => __( "Convert %d image(s) to AVIF?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
+				'confirmMedia'   => __( "Convert %d image(s) to JPEG with AVIF alternatives?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
 				'mediaBadResponse' => __( 'The server returned an invalid response (HTTP %d). The current image may have completed; check the library before retrying.', 'wp-cleanup' ),
+				'mediaLocation' => __( 'Location', 'wp-cleanup' ),
+				'mediaOriginal' => __( 'Original', 'wp-cleanup' ),
+				'mediaNew' => __( 'New', 'wp-cleanup' ),
 				'mediaReferences' => __( '%d reference path changes', 'wp-cleanup' ),
 				'mediaOriginals' => __( '%d original files moved to backup', 'wp-cleanup' ),
 				'mediaStopped'   => __( 'Stopped.', 'wp-cleanup' ),
@@ -529,6 +532,8 @@ final class Admin {
 			array(
 				'full_max'   => isset( $_POST['full_max'] ) ? absint( $_POST['full_max'] ) : 0,
 				'small_max'  => isset( $_POST['small_max'] ) ? absint( $_POST['small_max'] ) : 0,
+				'jpeg_max'   => isset( $_POST['jpeg_max'] ) ? absint( $_POST['jpeg_max'] ) : 0,
+				'jpeg_quality' => isset( $_POST['jpeg_quality'] ) ? absint( $_POST['jpeg_quality'] ) : 0,
 				'small_name' => isset( $_POST['small_name'] ) ? sanitize_key( wp_unslash( $_POST['small_name'] ) ) : '',
 				'set_flag'   => ! empty( $_POST['set_flag'] ),
 			)
@@ -652,8 +657,9 @@ final class Admin {
 
 		echo '<div class="wpcu-media-intro"><p>' . esc_html(
 			sprintf(
-				/* translators: 1: full size, 2: small size name, 3: small size */
-				__( 'Converts each JPEG, PNG or AVIF image to one AVIF of at most %1$d px plus one "%2$s" AVIF of at most %3$d px. Every other size, the original, the -scaled copy, stray thumbnails from old themes and .webp sidecars are moved into a backup set. Links to the old files in posts, meta and options are rewritten to the kept files.', 'wp-cleanup' ),
+				/* translators: 1: JPEG maximum, 2: AVIF maximum, 3: small size name, 4: small maximum */
+				__( 'Each image gets one optimized JPEG fallback of at most %1$d px, plus a full AVIF of at most %2$d px and an optional "%3$s" AVIF of at most %4$d px. The JPEG serves older devices and direct links; WordPress image markup serves AVIF where supported. Old files and sizes move into a restorable backup set.', 'wp-cleanup' ),
+				$s['jpeg_max'],
 				$s['full_max'],
 				$s['small_name'],
 				$s['small_max']
@@ -661,16 +667,21 @@ final class Admin {
 		) . '</p><p class="description">' . esc_html__( 'GIF and WebP (may be animated), site icons, headers and offloaded files are never touched. Space is freed when you delete the backup set on the Backups tab after checking the site.', 'wp-cleanup' ) . '</p></div>';
 
 		if ( ! $avif ) {
-			echo '<div class="notice notice-error inline"><p>' . esc_html__( 'This server cannot write AVIF images. Conversion needs WordPress 6.5+ and GD or Imagick built with AVIF support.', 'wp-cleanup' ) . '</p></div>';
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'This server cannot write AVIF. Conversion will keep the optimized JPEG fallback only.', 'wp-cleanup' ) . '</p></div>';
+		}
+		$jpeg = Media_Policy::jpeg_supported();
+		if ( ! $jpeg ) {
+			echo '<div class="notice notice-error inline"><p>' . esc_html__( 'This server cannot write JPEG images.', 'wp-cleanup' ) . '</p></div>';
 		}
 
 		echo '<details class="wpcu-media-settings"><summary>' . esc_html__( 'Image policy', 'wp-cleanup' ) . '</summary>';
 		echo '<form method="post" action="' . esc_url( $action ) . '">';
 		wp_nonce_field( 'wpcu_media_settings' );
 		echo '<input type="hidden" name="action" value="wpcu_media_settings">';
+		echo '<p><label>' . esc_html__( 'JPEG fallback: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="jpeg_max" min="320" max="8192" value="' . esc_attr( $s['jpeg_max'] ) . '"> px</label> <label>' . esc_html__( 'quality', 'wp-cleanup' ) . ' <input type="number" name="jpeg_quality" min="40" max="95" value="' . esc_attr( $s['jpeg_quality'] ) . '"></label></p>';
 		echo '<p><label>' . esc_html__( 'Full image: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="full_max" min="320" max="8192" value="' . esc_attr( $s['full_max'] ) . '"> px</label></p>';
 		echo '<p><label>' . esc_html__( 'Small image size name', 'wp-cleanup' ) . ' <input type="text" name="small_name" value="' . esc_attr( $s['small_name'] ) . '"></label> <label>' . esc_html__( 'longest side at most', 'wp-cleanup' ) . ' <input type="number" name="small_max" min="64" value="' . esc_attr( $s['small_max'] ) . '"> px</label></p>';
-		echo '<p><label><input type="checkbox" name="set_flag" value="1"' . checked( $s['set_flag'], true, false ) . '> ' . esc_html__( 'Mark converted images for the ALPS theme (_alps_two_size_upload), so its templates map old size names to these two files', 'wp-cleanup' ) . '</label></p>';
+		echo '<p><label><input type="checkbox" name="set_flag" value="1"' . checked( $s['set_flag'], true, false ) . '> ' . esc_html__( 'Mark converted images for the ALPS theme (_alps_two_size_upload), for compatibility with its image size handling', 'wp-cleanup' ) . '</label></p>';
 		submit_button( __( 'Save policy', 'wp-cleanup' ), 'secondary', 'submit', false );
 		echo '</form></details>';
 
@@ -757,9 +768,9 @@ final class Admin {
 		echo '</tbody></table></div>';
 		echo '<div class="wpcu-actions">';
 		echo '<label><input type="checkbox" class="wpcu-media-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label>';
-		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
+		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $jpeg, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
 		/* translators: %d: images */
-		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button> ';
+		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $jpeg, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button> ';
 		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after this batch', 'wp-cleanup' ) . '</button></p>';
 		echo '<p><progress class="wpcu-media-progress" max="100" value="0" hidden></progress> <span class="wpcu-media-status" aria-live="polite"></span></p>';
 		echo '</div></form>';
@@ -1024,7 +1035,11 @@ final class Admin {
 				if ( ! empty( $extra['reference_changes'] ) ) {
 					echo '<details><summary>' . esc_html( sprintf( __( '%d reference path changes', 'wp-cleanup' ), count( $extra['reference_changes'] ) ) ) . '</summary><ul>';
 					foreach ( $extra['reference_changes'] as $change ) {
-						echo '<li>' . esc_html( $change['where'] ) . '<br><code>' . esc_html( $change['from'] ) . '</code> → <code>' . esc_html( $change['to'] ) . '</code></li>';
+						echo '<li class="wpcu-reference-change">';
+						echo '<div><strong>' . esc_html__( 'Location', 'wp-cleanup' ) . ':</strong> ' . esc_html( $change['where'] ) . '</div>';
+						echo '<div><strong>' . esc_html__( 'Original', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['from'] ) . '</code></div>';
+						echo '<div><strong>' . esc_html__( 'New', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['to'] ) . '</code></div>';
+						echo '</li>';
 					}
 					echo '</ul></details>';
 				}

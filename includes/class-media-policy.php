@@ -1,10 +1,9 @@
 <?php
 /**
- * Target image policy: one AVIF "full" image plus at most one smaller AVIF.
+ * Target image policy: one JPEG fallback plus a full and optional small AVIF.
  *
- * Defaults match the Adventistai ALPS theme upload policy (full <= 1920 px,
- * "alps-small" <= 768 px, flag meta _alps_two_size_upload), so converted
- * legacy attachments behave exactly like new uploads under that theme.
+ * Defaults use a 1920 px JPEG and full AVIF, plus an optional 768 px AVIF.
+ * The ALPS flag remains available for theme compatibility.
  *
  * @package WPCleanup
  */
@@ -23,8 +22,11 @@ final class Media_Policy {
 	/** Meta flag the ALPS theme uses for two-size attachments. */
 	const ALPS_FLAG = '_alps_two_size_upload';
 
+	/** Generated JPEG and AVIF paths plus the policy used to make them. */
+	const OUTPUT_META = '_wpcu_image_outputs';
+
 	/**
-	 * @return array{full_max:int,small_name:string,small_max:int,set_flag:bool}
+	 * @return array{full_max:int,small_name:string,small_max:int,jpeg_max:int,jpeg_quality:int,set_flag:bool}
 	 */
 	public static function settings() {
 		$saved = get_option( self::OPTION, array() );
@@ -40,11 +42,15 @@ final class Media_Policy {
 			'full_max'   => 1920,
 			'small_name' => 'alps-small',
 			'small_max'  => 768,
+			'jpeg_max'   => 1920,
+			'jpeg_quality' => 82,
 			'set_flag'   => true,
 		);
 		$out               = wp_parse_args( $input, $defaults );
 		$out['full_max']   = max( 320, min( 8192, (int) $out['full_max'] ) );
 		$out['small_max']  = max( 64, min( $out['full_max'] - 1, (int) $out['small_max'] ) );
+		$out['jpeg_max'] = max( 320, min( 8192, (int) $out['jpeg_max'] ) );
+		$out['jpeg_quality'] = max( 40, min( 95, (int) $out['jpeg_quality'] ) );
 		$out['small_name'] = sanitize_key( $out['small_name'] );
 		if ( '' === $out['small_name'] || 'full' === $out['small_name'] ) {
 			$out['small_name'] = $defaults['small_name'];
@@ -68,6 +74,14 @@ final class Media_Policy {
 			require_once ABSPATH . WPINC . '/media.php';
 		}
 		return (bool) wp_image_editor_supports( array( 'mime_type' => 'image/avif' ) );
+	}
+
+	/** Whether the image editor can write the required JPEG fallback. */
+	public static function jpeg_supported() {
+		if ( ! function_exists( 'wp_image_editor_supports' ) ) {
+			require_once ABSPATH . WPINC . '/media.php';
+		}
+		return (bool) wp_image_editor_supports( array( 'mime_type' => 'image/jpeg' ) );
 	}
 
 	/**

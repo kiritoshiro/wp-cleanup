@@ -165,7 +165,21 @@
 			var list = document.createElement( 'ul' );
 			entries.forEach( function ( entry ) {
 				var item = document.createElement( 'li' );
-				item.textContent = describe( entry );
+				if ( 'object' === typeof entry ) {
+					item.className = 'wpcu-reference-change';
+					[ [ wpCleanup.mediaLocation, entry.where ], [ wpCleanup.mediaOriginal, entry.from ], [ wpCleanup.mediaNew, entry.to ] ].forEach( function ( pair ) {
+						var line = document.createElement( 'div' );
+						var name = document.createElement( 'strong' );
+						name.textContent = pair[ 0 ] + ': ';
+						line.appendChild( name );
+						var value = document.createElement( 'span' );
+						value.textContent = pair[ 1 ];
+						line.appendChild( value );
+						item.appendChild( line );
+						} );
+				} else {
+					item.textContent = describe( entry );
+				}
 				list.appendChild( item );
 			} );
 			details.appendChild( list );
