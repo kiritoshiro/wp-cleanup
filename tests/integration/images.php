@@ -226,6 +226,20 @@ wpcu_ok( array( 'alps-small' ) === array_keys( $m['sizes'] ) && 768 === $m['size
 wpcu_ok( ! isset( $m['original_image'] ) && '1' === (string) get_post_meta( $big, Media_Policy::ALPS_FLAG, true ), 'original_image dropped, ALPS flag set' );
 $left = array_values( array_filter( glob( $dir . '/wpcut-big*' ), 'is_file' ) );
 wpcu_ok( 2 === count( $left ), 'exactly two files left for big: ' . implode( ', ', array_map( 'basename', $left ) ) );
+wpcu_ok( 'wpcut-big-768x512.avif' === $m['sizes']['alps-small']['file'], 'small AVIF keeps the same stem as its old JPEG counterpart' );
+wpcu_ok( in_array( $subdir . '/wpcut-big.jpg', $results[ $big ]['backed_up'], true ) && in_array( $subdir . '/wpcut-big-scaled.jpg', $results[ $big ]['backed_up'], true ), 'old original and scaled image were moved into the backup set' );
+$reference_details = $results[ $big ]['reference_changes'];
+wpcu_ok( $reference_details && count( array_filter( $reference_details, static function ( $change ) { return false !== strpos( $change['where'], 'post_content' ) && false !== strpos( $change['from'], 'wpcut-big-1024x683.jpg' ) && false !== strpos( $change['to'], '.avif' ); } ) ) > 0, 'reference details show the changed row and old/new paths' );
+$stored_backup = Backup::open( $backup->id );
+wpcu_ok( ! empty( $stored_backup->manifest['items'][0]['extra']['reference_changes'] ) && ! empty( $stored_backup->manifest['items'][0]['extra']['moved'] ), 'reference changes and original file paths remain available in the backup manifest' );
+$backup_view = new ReflectionMethod( WPCleanup\Admin::class, 'render_backups' );
+$backup_view->setAccessible( true );
+ob_start();
+$backup_view->invoke( new WPCleanup\Admin() );
+$backup_html = ob_get_clean();
+wpcu_ok( false !== strpos( $backup_html, 'reference path changes' ) && false !== strpos( $backup_html, 'wpcut-big-1024x683.jpg' ) && false !== strpos( $backup_html, 'wpcut-big.jpg' ), 'Backups tab exposes expandable reference and original-file lists' );
+
+
 $ms = wp_get_attachment_metadata( $small );
 wpcu_ok( array() === $ms['sizes'] && 500 === $ms['width'], 'small image: single AVIF, no extra size' );
 $src = wp_get_attachment_image_src( $big, 'alps-small' );
