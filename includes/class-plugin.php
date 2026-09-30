@@ -32,6 +32,9 @@ final class Plugin {
 			return;
 		}
 
+		// Update checks also run from cron, so this is not limited to admin requests.
+		Updater::register();
+
 		if ( is_admin() ) {
 			( new Admin() )->register();
 		}

@@ -299,6 +299,16 @@ final class CLI {
 			foreach ( $r['reasons'] as $reason => $count ) {
 				\WP_CLI::log( sprintf( '  skipped %d: %s', $count, $reason ) );
 			}
+			if ( isset( $r['unused'], $r['groups'] ) ) {
+				\WP_CLI::log( sprintf( 'Not used anywhere: %d. Look-alike groups: %d (%d images)%s.', count( $r['unused'] ), count( $r['groups'] ), array_sum( array_map( 'count', wp_list_pluck( $r['groups'], 'ids' ) ) ), $r['hash_left'] ? sprintf( '; %d images not compared yet, run again to continue', $r['hash_left'] ) : '' ) );
+				foreach ( $r['groups'] as $group ) {
+					$files = array();
+					foreach ( $group['ids'] as $id ) {
+						$files[] = '#' . $id . ' ' . $r['info'][ $id ]['file'] . ( empty( $r['use_counts'][ $id ] ) ? ' (not used)' : ' (used ' . $r['use_counts'][ $id ] . 'x)' );
+					}
+					\WP_CLI::log( '  ' . ( $group['identical'] ? 'identical: ' : 'look alike: ' ) . implode( ' | ', $files ) );
+				}
+			}
 			if ( $r['items'] ) {
 				$rows = array_map(
 					static function ( $i ) {
@@ -320,7 +330,7 @@ final class CLI {
 
 		$ids = ! empty( $assoc['ids'] )
 			? array_filter( array_map( 'intval', explode( ',', $assoc['ids'] ) ) )
-			: wp_list_pluck( Media_Report::build()['items'], 'id' );
+			: wp_list_pluck( Media_Report::build( null, false )['items'], 'id' );
 		if ( ! empty( $assoc['limit'] ) ) {
 			$ids = array_slice( $ids, 0, max( 1, (int) $assoc['limit'] ) );
 		}
