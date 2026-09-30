@@ -127,7 +127,20 @@ final class Media_Report {
 			}
 		}
 		$out = array();
+		$duplicate_unused = array();
 		foreach ( $groups as $group ) {
+			$keeper = $group[0];
+			foreach ( $group as $candidate ) {
+				if ( ! empty( $usage['counts'][ $candidate ] ) ) {
+					$keeper = $candidate;
+					break;
+				}
+			}
+			foreach ( $group as $candidate ) {
+				if ( $candidate !== $keeper && empty( $usage['counts'][ $candidate ] ) ) {
+					$duplicate_unused[] = $candidate;
+				}
+			}
 			$md5   = array_unique( array_intersect_key( $sim['md5'], array_flip( $group ) ) );
 			$out[] = array(
 				'ids'       => $group,
@@ -139,6 +152,7 @@ final class Media_Report {
 			'use_counts' => $usage['counts'],
 			'parents'    => $usage['parents'],
 			'unused'     => $unused,
+			'duplicate_unused' => $duplicate_unused,
 			'groups'     => $out,
 			'info'       => $info,
 			'hashed'     => count( $sim['hashes'] ),
@@ -179,6 +193,11 @@ final class Media_Report {
 	 */
 	public static function last() {
 		return Storage::read_json( self::FILE );
+	}
+
+	/** Force a new usage check after attachments have been removed. */
+	public static function clear() {
+		Storage::write_json( self::FILE, array() );
 	}
 
 	/**

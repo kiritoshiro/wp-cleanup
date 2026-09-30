@@ -22,6 +22,7 @@ final class Admin {
 		add_action( 'admin_post_wpcu_delete_backup', array( $this, 'handle_delete_backup' ) );
 		add_action( 'admin_post_wpcu_media_settings', array( $this, 'handle_media_settings' ) );
 		add_action( 'admin_post_wpcu_media_scan', array( $this, 'handle_media_scan' ) );
+		add_action( 'admin_post_wpcu_media_remove', array( $this, 'handle_media_remove' ) );
 		add_action( 'wp_ajax_wpcu_media_batch', array( $this, 'ajax_media_batch' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( WPCU_FILE ), array( $this, 'action_links' ) );
 	}
@@ -54,6 +55,7 @@ final class Admin {
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
 				'mediaStopped'   => __( 'Stopped.', 'wp-cleanup' ),
 				'mediaConfirmBox' => __( 'Please tick the backup confirmation first.', 'wp-cleanup' ),
+				'confirmRemove' => __( 'Move %d unused image(s) and their attachment records into a restorable backup set? Check that none are used from CSS, theme files, external sites or plugin tables.', 'wp-cleanup' ),
 			)
 		);
 	}
@@ -190,7 +192,7 @@ final class Admin {
 		$report = $backup->restore();
 		try {
 			( new Scanner() )->scan_and_store(); // Keep the lists in step with what came back.
-			if ( in_array( 'media', wp_list_pluck( $backup->manifest['items'], 'type' ), true ) && Media_Report::last() ) {
+			if ( array_intersect( array( 'media', 'media_delete' ), wp_list_pluck( $backup->manifest['items'], 'type' ) ) && Media_Report::last() ) {
 				Media_Report::build_and_store();
 			}
 		} catch ( \Exception $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement
@@ -544,6 +546,34 @@ final class Admin {
 		$this->back( array( 'tab' => 'images' ) );
 	}
 
+	/** Move selected, freshly verified unused attachments into a restorable backup. */
+	public function handle_media_remove() {
+		$this->guard();
+		check_admin_referer( 'wpcu_media_remove' );
+		$ids = isset( $_POST['ids'] ) ? array_values( array_unique( array_filter( array_map( 'absint', (array) wp_unslash( $_POST['ids'] ) ) ) ) ) : array();
+		if ( ! $ids || count( $ids ) > 20 || empty( $_POST['confirm'] ) ) {
+			$this->notice( 'warning', __( 'Select 1–20 images and confirm that you have a full site backup.', 'wp-cleanup' ) );
+			$this->back( array( 'tab' => 'images' ) );
+		}
+		try {
+			$usage   = Media_Usage::build();
+			$backup  = Backup::start();
+			$results = array();
+			foreach ( $ids as $id ) {
+				$results[] = Media_Remover::remove( $id, $backup, $usage );
+			}
+			$removed = count( array_filter( $results, static function ( $r ) { return 'deleted' === $r['status']; } ) );
+			$details = array_map( static function ( $r ) { return '#' . $r['id'] . ': ' . $r['status'] . ' — ' . $r['message']; }, $results );
+			if ( $removed ) {
+				Media_Report::clear();
+			}
+			$this->notice( $removed === count( $ids ) ? 'success' : 'warning', sprintf( __( 'Removed %1$d of %2$d images. Backup set: %3$s. Check the library again for an updated report.', 'wp-cleanup' ), $removed, count( $ids ), $backup->id ), $details );
+		} catch ( \Exception $e ) {
+			$this->notice( 'error', $e->getMessage() );
+		}
+		$this->back( array( 'tab' => 'images' ) );
+	}
+
 	public function ajax_media_batch() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_send_json_error( array( 'message' => __( 'You are not allowed to do this.', 'wp-cleanup' ) ), 403 );
@@ -814,7 +844,7 @@ final class Admin {
 		$info = $report['info'];
 
 		echo '<h2>' . esc_html__( 'Look-alike images', 'wp-cleanup' ) . '</h2>';
-		echo '<p class="description wpcu-media-intro">' . esc_html__( 'Images that show the same picture, also when resized, re-compressed or saved in another format. Usually only one copy needs to stay: keep the one in use and remove the others in the Media Library after checking. Nothing is deleted here.', 'wp-cleanup' ) . '</p>';
+		echo '<p class="description wpcu-media-intro">' . esc_html__( 'Images that show the same picture, also when resized, re-compressed or saved in another format. Usually only one copy needs to stay. Review the copies below, then select unused images to move into a restorable backup set.', 'wp-cleanup' ) . '</p>';
 		if ( ! empty( $report['hash_left'] ) ) {
 			/* translators: 1: images compared, 2: images left */
 			echo '<div class="notice notice-warning inline"><p>' . esc_html( sprintf( __( 'Compared %1$d images; %2$d are not compared yet. Check the library again to continue: finished images are remembered.', 'wp-cleanup' ), $report['hashed'], $report['hash_left'] ) ) . '</p></div>';
@@ -855,15 +885,24 @@ final class Admin {
 		}
 		/* translators: %d: images */
 		echo '<details class="wpcu-unused-list"><summary>' . esc_html( sprintf( _n( 'Show %d image', 'Show %d images', count( $report['unused'] ), 'wp-cleanup' ), count( $report['unused'] ) ) ) . '</summary>';
-		echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-items"><thead><tr><th class="wpcu-thumb-col"></th><th>' . esc_html__( 'File', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Size', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Disk', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Uploaded to', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="wpcu-unused-form">';
+		wp_nonce_field( 'wpcu_media_remove' );
+		echo '<input type="hidden" name="action" value="wpcu_media_remove">';
+		echo '<p><button type="button" class="button wpcu-select-lookalikes">' . esc_html__( 'Select unused look-alike copies', 'wp-cleanup' ) . '</button> <button type="button" class="button wpcu-select-unused">' . esc_html__( 'Select first 20 unused images', 'wp-cleanup' ) . '</button> <button type="button" class="button wpcu-clear-unused">' . esc_html__( 'Clear selection', 'wp-cleanup' ) . '</button></p>';
+		echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-items"><thead><tr><th class="check-column"></th><th class="wpcu-thumb-col"></th><th>' . esc_html__( 'File', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Size', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Disk', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Uploaded to', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
 		foreach ( $report['unused'] as $id ) {
 			$i = isset( $info[ $id ] ) ? $info[ $id ] : array( 'file' => '#' . $id, 'w' => 0, 'h' => 0, 'bytes' => 0 );
-			echo '<tr><td class="wpcu-thumb-col">' . self::thumb( $id ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+			$eligible = ! Media_Policy::skip_reason( $id );
+			$duplicate = in_array( $id, isset( $report['duplicate_unused'] ) ? $report['duplicate_unused'] : array(), true );
+			echo '<tr><th scope="row" class="check-column"><input type="checkbox" name="ids[]" value="' . (int) $id . '" data-lookalike="' . ( $duplicate ? '1' : '0' ) . '"' . disabled( $eligible, false, false ) . ' aria-label="' . esc_attr( sprintf( __( 'Select image %d', 'wp-cleanup' ), $id ) ) . '"></th><td class="wpcu-thumb-col">' . self::thumb( $id ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
 			echo '<td class="wpcu-name"><a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a></td>';
 			echo '<td class="num">' . esc_html( $i['w'] . '×' . $i['h'] ) . '</td><td class="num">' . esc_html( size_format( $i['bytes'], 1 ) ) . '</td>';
 			echo '<td>' . ( ! empty( $report['parents'][ $id ] ) ? self::post_link( (int) $report['parents'][ $id ] ) : '<span class="wpcu-muted">–</span>' ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- post_link() escapes.
 		}
-		echo '</tbody></table></div></details>';
+		echo '</tbody></table></div>';
+		echo '<p><label><input type="checkbox" name="confirm" value="1" class="wpcu-unused-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label></p>';
+		echo '<p><button type="submit" class="button button-primary">' . esc_html__( 'Move selected images to backup', 'wp-cleanup' ) . '</button> <span class="wpcu-unused-count" aria-live="polite"></span></p>';
+		echo '<p class="description">' . esc_html__( 'Up to 20 images per action. Their attachment records and local files are kept in a restorable backup set. Delete that set only after checking the site. Images used by external sites, theme files, CSS or plugin tables may not be detected.', 'wp-cleanup' ) . '</p></form></details>';
 	}
 
 	private function render_backups() {

@@ -10,6 +10,9 @@
  * @package WPCleanup
  */
 
+use WPCleanup\Backup;
+use WPCleanup\Media_Inventory;
+use WPCleanup\Media_Remover;
 use WPCleanup\Media_Report;
 use WPCleanup\Media_Similarity;
 use WPCleanup\Media_Usage;
@@ -197,9 +200,42 @@ wpcu_ok( 0 === $report['hash_left'], 'report: every image compared' );
 $again = Media_Similarity::hash_all( array_values( $img ), 0.0 );
 wpcu_ok( count( $img ) === count( $again['hashes'] ) && 0 === $again['pending'], 'hashes are reused from the cache even with no time budget' );
 
-/* 3. Updater -------------------------------------------------------------- */
+// Two completely unused look-alikes: keep the older one when selecting copies.
+$j_file = $dir . "/wpcuu-j-$run.jpg";
+copy( get_attached_file( $img['e'], true ), $j_file );
+$j_id = wpcuu_attach( $j_file );
+$dupe_report = Media_Report::build();
+wpcu_ok( in_array( $j_id, $dupe_report['duplicate_unused'], true ) && ! in_array( $img['e'], $dupe_report['duplicate_unused'], true ), 'unused look-alike selection keeps one copy of an all-unused group' );
+wp_delete_attachment( $j_id, true );
 
-WP_CLI::log( "\n3. GitHub updater" );
+/* 3. Unused image removal and restore ------------------------------------ */
+
+WP_CLI::log( "\n3. Unused image removal" );
+$backup = Backup::start();
+$used_result = Media_Remover::remove( $img['a'], $backup, Media_Usage::build() );
+wpcu_ok( 'refused' === $used_result['status'] && get_post( $img['a'] ), 'a featured image is refused' );
+$original = get_attached_file( $img['e'], true );
+$original_hash = md5_file( $original );
+$old_meta = get_post_meta( $img['e'], '_wp_attachment_metadata', true );
+$removed = Media_Remover::remove( $img['e'], $backup, Media_Usage::build() );
+wpcu_ok( 'deleted' === $removed['status'] && ! get_post( $img['e'] ) && ! file_exists( $original ), 'an unused image and its files move into a backup set' );
+$restored = $backup->restore();
+wpcu_ok( $restored && $restored[0]['ok'] && get_post( $img['e'] ) && is_file( $original ) && $original_hash === md5_file( $original ), 'the attachment and original file restore' );
+wpcu_ok( $old_meta === get_post_meta( $img['e'], '_wp_attachment_metadata', true ), 'attachment metadata round-trips exactly' );
+update_post_meta( $p1, 'hero_image', $img['e'] );
+$now_used = Media_Remover::remove( $img['e'], Backup::start(), Media_Usage::build() );
+wpcu_ok( 'refused' === $now_used['status'] && is_file( $original ), 'a new image field prevents removal after an old scan' );
+delete_post_meta( $p1, 'hero_image', $img['e'] );
+$block_move = static function () { return false; };
+add_filter( 'wp_cleanup_media_move_file', $block_move );
+$blocked = Media_Remover::remove( $img['e'], Backup::start(), Media_Usage::build() );
+remove_filter( 'wp_cleanup_media_move_file', $block_move );
+wpcu_ok( 'failed' === $blocked['status'] && get_post( $img['e'] ) && is_file( $original ), 'a failed file move leaves the attachment intact' );
+Media_Inventory::flush();
+
+/* 4. Updater -------------------------------------------------------------- */
+
+WP_CLI::log( "\n4. GitHub updater" );
 $asset = array( 'name' => 'wp-cleanup-9.9.9.zip', 'state' => 'uploaded', 'browser_download_url' => 'https://github.com/kiritoshiro/wp-cleanup/releases/download/v9.9.9/wp-cleanup-9.9.9.zip', 'url' => 'https://api.github.com/repos/kiritoshiro/wp-cleanup/releases/assets/1', 'digest' => 'sha256:00' );
 $json  = array( 'tag_name' => 'v9.9.9', 'draft' => false, 'prerelease' => false, 'html_url' => 'https://github.com/kiritoshiro/wp-cleanup/releases/tag/v9.9.9', 'body' => 'x', 'assets' => array( $asset ) );
 $ok    = Updater::parse( $json );

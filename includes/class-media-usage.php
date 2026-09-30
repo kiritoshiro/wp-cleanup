@@ -69,6 +69,9 @@ final class Media_Usage {
 			 JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_wp_attached_file'
 			 WHERE p.post_type = 'attachment' AND p.post_mime_type LIKE 'image/%'"
 		);
+		if ( $wpdb->last_error ) {
+			throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+		}
 		foreach ( (array) $rows as $row ) {
 			$id               = (int) $row->ID;
 			$this->ids[ $id ] = true;
@@ -269,6 +272,9 @@ final class Media_Usage {
 			   AND p.post_type NOT IN ('revision','attachment','customize_changeset','oembed_cache')
 			   AND p.post_status NOT IN ('auto-draft','trash','inherit')"
 		);
+		if ( $wpdb->last_error ) {
+			throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+		}
 		foreach ( (array) $rows as $row ) {
 			$this->add( (int) $row->meta_value, 'featured', (int) $row->post_id );
 		}
@@ -288,6 +294,9 @@ final class Media_Usage {
 					$last
 				)
 			);
+			if ( $wpdb->last_error ) {
+				throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+			}
 			foreach ( (array) $rows as $row ) {
 				$last = (int) $row->ID;
 				foreach ( $this->ids_in_text( $row->post_content . "\n" . $row->post_excerpt ) as $id ) {
@@ -318,6 +327,9 @@ final class Media_Usage {
 					self::IMAGE_KEY
 				)
 			);
+			if ( $wpdb->last_error ) {
+				throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+			}
 			foreach ( (array) $rows as $row ) {
 				$last = (int) $row->meta_id;
 				foreach ( $this->ids_in_value( $row->meta_value, $row->meta_key ) as $id ) {
@@ -338,6 +350,9 @@ final class Media_Usage {
 				self::IMAGE_KEY
 			)
 		);
+		if ( $wpdb->last_error ) {
+			throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+		}
 		foreach ( (array) $rows as $row ) {
 			foreach ( $this->ids_in_value( $row->meta_value, $row->meta_key ) as $id ) {
 				$this->add( $id, 'term', (int) $row->term_id, $row->meta_key );
@@ -360,6 +375,9 @@ final class Media_Usage {
 				self::IMAGE_KEY
 			)
 		);
+		if ( $wpdb->last_error ) {
+			throw new \RuntimeException( __( 'Image usage could not be checked completely. Nothing was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
+		}
 		foreach ( (array) $rows as $row ) {
 			$name = (string) $row->option_name;
 			$ids  = in_array( $name, array( 'site_icon', 'site_logo' ), true ) ? self::numbers( $row->option_value ) : $this->ids_in_value( $row->option_value, $name );
