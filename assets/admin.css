@@ -77,6 +77,9 @@
 .wpcu-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 22px; }
 .wpcu-section-head h2 { margin: 0; }
 .wpcu-section-head .wpcu-inline-form { margin: 0; }
+.wpcu-dup-merge { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: end; }
+.wpcu-dup-merge label { display: grid; gap: 3px; min-width: 0; max-width: 100%; }
+.wpcu-dup-merge select { max-width: 220px; width: 100%; }
 .wpcu-dup-remove { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .wpcu-dup-remove label { white-space: nowrap; }
 .wpcu-selection-count { margin-left: 6px; font-variant-numeric: tabular-nums; }

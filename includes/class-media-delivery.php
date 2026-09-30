@@ -78,6 +78,20 @@ final class Media_Delivery {
 		if ( ! $source ) {
 			return $html;
 		}
+		// When AVIF is the attachment's main file, the img element must point to JPEG
+		// so browsers that ignore the AVIF source have a real fallback.
+		if ( 'image/avif' === get_post_mime_type( $id ) ) {
+			$jpeg_rel = wp_normalize_path( (string) $outputs['jpeg'] );
+			if ( ! $jpeg_rel || '/' === $jpeg_rel[0] || false !== strpos( $jpeg_rel, ':' ) || preg_match( '#(^|/)\.\.(/|$)#', $jpeg_rel ) || ! is_file( $root . '/' . $jpeg_rel ) ) {
+				return $html;
+			}
+			$jpeg_url = esc_url( trailingslashit( $uploads['baseurl'] ) . str_replace( '%2F', '/', rawurlencode( $jpeg_rel ) ) );
+			$html = (string) preg_replace( '/\ssrc="[^"]*"/i', ' src="' . $jpeg_url . '"', $html, 1 );
+			$html = (string) preg_replace( '/\ssrcset="[^"]*"/i', '', $html );
+			$jpeg_width = isset( $outputs['jpeg_width'] ) ? (int) $outputs['jpeg_width'] : 0;
+			$jpeg_candidate = $jpeg_url . ( $jpeg_width ? ' ' . $jpeg_width . 'w' : '' );
+			$html = (string) preg_replace( '/<img\s/i', '<img srcset="' . esc_attr( $jpeg_candidate ) . '" ', $html, 1 );
+		}
 		return '<picture><source type="image/avif" srcset="' . esc_attr( implode( ', ', $source ) ) . '" sizes="' . esc_attr( $sizes ) . '">' . $html . '</picture>';
 	}
 }
