@@ -84,3 +84,9 @@
 .wpcu-sort-button:hover, .wpcu-sort-button:focus { color: #135e96; text-decoration: underline; }
 .wpcu-sortable th[aria-sort="ascending"] .wpcu-sort-button::after { content: " \25B2"; font-size: 10px; }
 .wpcu-sortable th[aria-sort="descending"] .wpcu-sort-button::after { content: " \25BC"; font-size: 10px; }
+
+.wpcu-result details { margin-top: 6px; color: #3c434a; }
+.wpcu-result summary { cursor: pointer; font-weight: 600; }
+.wpcu-result details ul { max-height: 240px; overflow: auto; padding-left: 18px; margin: 4px 0; }
+.wpcu-result details li { margin: 3px 0; overflow-wrap: anywhere; }
+.wpcu-details li { overflow-wrap: anywhere; }

@@ -143,15 +143,40 @@
 			ids.forEach( function ( id ) {
 				body.append( 'ids[]', id );
 			} );
-			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( r ) {
-				return r.json();
+			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( response ) {
+				return response.text().then( function ( raw ) {
+					var json;
+					try {
+						json = JSON.parse( raw );
+					} catch ( error ) {
+						throw new Error( wpCleanup.mediaBadResponse.replace( '%d', response.status ) );
+					}
+					return json;
+				} );
 			} );
+		};
+
+		var appendList = function ( cell, label, entries, describe ) {
+			if ( ! entries || ! entries.length ) { return; }
+			var details = document.createElement( 'details' );
+			var summary = document.createElement( 'summary' );
+			summary.textContent = label.replace( '%d', entries.length );
+			details.appendChild( summary );
+			var list = document.createElement( 'ul' );
+			entries.forEach( function ( entry ) {
+				var item = document.createElement( 'li' );
+				item.textContent = describe( entry );
+				list.appendChild( item );
+			} );
+			details.appendChild( list );
+			cell.appendChild( details );
 		};
 
 		Array.prototype.forEach.call( runButtons, function ( button ) {
 			button.addEventListener( 'click', function () {
 				var ids = mRows.filter( function ( row ) {
-					return 'all' === button.getAttribute( 'data-scope' ) || row.querySelector( 'input[type=checkbox]' ).checked;
+					var box = row.querySelector( 'input[type=checkbox]' );
+					return ! box.disabled && ( 'all' === button.getAttribute( 'data-scope' ) || box.checked );
 				} ).map( function ( row ) {
 					return row.getAttribute( 'data-id' );
 				} );
@@ -185,7 +210,7 @@
 						finish( wpCleanup.mediaStopped + ' ' + wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
 						return;
 					}
-					var chunk = ids.slice( done, done + 3 );
+					var chunk = ids.slice( done, done + 1 );
 					if ( ! chunk.length ) {
 						finish( wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
 						return;
@@ -200,7 +225,10 @@
 						json.data.results.forEach( function ( r ) {
 							var row = media.querySelector( 'tr[data-id="' + r.id + '"]' );
 							if ( row ) {
-								row.querySelector( '.wpcu-result' ).textContent = r.status + ': ' + r.message;
+								var resultCell = row.querySelector( '.wpcu-result' );
+								resultCell.textContent = r.status + ': ' + r.message;
+								appendList( resultCell, wpCleanup.mediaReferences, r.reference_changes, function ( item ) { return item.where + ': ' + item.from + ' → ' + item.to; } );
+								appendList( resultCell, wpCleanup.mediaOriginals, r.backed_up, function ( item ) { return item; } );
 								row.classList.add( 'wpcu-row-' + r.status );
 								var box = row.querySelector( 'input[type=checkbox]' );
 								box.checked = false;

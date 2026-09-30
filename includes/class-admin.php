@@ -54,6 +54,9 @@ final class Admin {
 				'mediaNonce'     => wp_create_nonce( 'wpcu_media_batch' ),
 				'confirmMedia'   => __( "Convert %d image(s) to AVIF?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
+				'mediaBadResponse' => __( 'The server returned an invalid response (HTTP %d). The current image may have completed; check the library before retrying.', 'wp-cleanup' ),
+				'mediaReferences' => __( '%d reference path changes', 'wp-cleanup' ),
+				'mediaOriginals' => __( '%d original files moved to backup', 'wp-cleanup' ),
 				'mediaStopped'   => __( 'Stopped.', 'wp-cleanup' ),
 				'mediaConfirmBox' => __( 'Please tick the backup confirmation first.', 'wp-cleanup' ),
 				'confirmRemove' => __( 'Move %d unused image(s) and their attachment records into a restorable backup set? Check that none are used from CSS, theme files, external sites or plugin tables.', 'wp-cleanup' ),
@@ -601,6 +604,9 @@ final class Admin {
 	}
 
 	public function ajax_media_batch() {
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 300 ); // phpcs:ignore -- One image may take longer than the normal web request.
+		}
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_send_json_error( array( 'message' => __( 'You are not allowed to do this.', 'wp-cleanup' ) ), 403 );
 		}
@@ -1006,7 +1012,23 @@ final class Admin {
 			);
 			echo '<tr><td><code>' . esc_html( $b['id'] ) . '</code><details><summary>' . esc_html__( 'Contents', 'wp-cleanup' ) . '</summary><ul class="wpcu-details">';
 			foreach ( $b['items'] as $i ) {
-				echo '<li>' . esc_html( $i['type'] . ': ' . $i['label'] . ' — ' . $i['result'] . ( $i['message'] ? ' (' . $i['message'] . ')' : '' ) . ( $i['restored'] ? ' — ' . __( 'restored', 'wp-cleanup' ) : '' ) ) . '</li>';
+				echo '<li>' . esc_html( $i['type'] . ': ' . $i['label'] . ' — ' . $i['result'] . ( $i['message'] ? ' (' . $i['message'] . ')' : '' ) . ( $i['restored'] ? ' — ' . __( 'restored', 'wp-cleanup' ) : '' ) );
+				$extra = isset( $i['extra'] ) ? $i['extra'] : array();
+				if ( ! empty( $extra['moved'] ) ) {
+					echo '<details><summary>' . esc_html( sprintf( __( '%d original files moved to backup', 'wp-cleanup' ), count( $extra['moved'] ) ) ) . '</summary><ul>';
+					foreach ( $extra['moved'] as $path ) {
+						echo '<li><code>' . esc_html( $path ) . '</code></li>';
+					}
+					echo '</ul></details>';
+				}
+				if ( ! empty( $extra['reference_changes'] ) ) {
+					echo '<details><summary>' . esc_html( sprintf( __( '%d reference path changes', 'wp-cleanup' ), count( $extra['reference_changes'] ) ) ) . '</summary><ul>';
+					foreach ( $extra['reference_changes'] as $change ) {
+						echo '<li>' . esc_html( $change['where'] ) . '<br><code>' . esc_html( $change['from'] ) . '</code> → <code>' . esc_html( $change['to'] ) . '</code></li>';
+					}
+					echo '</ul></details>';
+				}
+				echo '</li>';
 			}
 			echo '</ul></details></td>';
 			echo '<td>' . esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $b['created'] ) ) . '</td>';
