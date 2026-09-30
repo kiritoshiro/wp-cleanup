@@ -206,6 +206,23 @@ copy( get_attached_file( $img['e'], true ), $j_file );
 $j_id = wpcuu_attach( $j_file );
 $dupe_report = Media_Report::build();
 wpcu_ok( in_array( $j_id, $dupe_report['duplicate_unused'], true ) && ! in_array( $img['e'], $dupe_report['duplicate_unused'], true ), 'unused look-alike selection keeps one copy of an all-unused group' );
+$stored_report = Media_Report::build_and_store();
+$groups_before = $stored_report['groups'];
+$k_file = $dir . "/wpcuu-k-$run.jpg";
+copy( get_attached_file( $img['e'], true ), $k_file );
+$k_id = wpcuu_attach( $k_file );
+$similarity_only = Media_Report::refresh_similarity();
+wpcu_ok( in_array( $k_id, array_merge( ...array_column( $similarity_only['groups'], 'ids' ) ), true ) && ! in_array( $k_id, $similarity_only['usage_checked_ids'], true ), 'look-alike rescan finds a new image without changing the saved usage scan' );
+$usage_only = Media_Report::refresh_usage();
+wpcu_ok( in_array( $k_id, $usage_only['unused'], true ) && in_array( $k_id, $usage_only['usage_checked_ids'], true ) && $similarity_only['groups'] === $usage_only['groups'], 'usage-only rescan finds the new unused image without rerunning similarity' );
+update_post_meta( $p1, 'hero_image', $k_id );
+$usage_with_reference = Media_Report::refresh_usage();
+wpcu_ok( ! in_array( $k_id, $usage_with_reference['unused'], true ) && $groups_before !== $similarity_only['groups'], 'usage-only rescan notices a new reference and preserves new look-alike groups' );
+delete_post_meta( $p1, 'hero_image', $k_id );
+wp_delete_attachment( $k_id, true );
+Media_Report::forget_removed( array( $k_id ) );
+$after_forget = Media_Report::last();
+wpcu_ok( ! isset( $after_forget['info'][ $k_id ] ) && ! in_array( $k_id, array_merge( ...array_column( $after_forget['groups'], 'ids' ) ), true ), 'deleted image is removed from saved analysis without clearing the report' );
 wp_delete_attachment( $j_id, true );
 
 /* 3. Unused image removal and restore ------------------------------------ */
