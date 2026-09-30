@@ -628,6 +628,15 @@ final class Admin {
 		$this->card( __( 'Their files now', 'wp-cleanup' ), number_format_i18n( $report['files'] ) . ' · ' . ( $report['bytes'] ? size_format( $report['bytes'], 1 ) : '0 B' ) );
 		$this->card( __( 'Stray files among them', 'wp-cleanup' ), number_format_i18n( $report['strays'] ) . ' · ' . ( $report['stray_b'] ? size_format( $report['stray_b'], 1 ) : '0 B' ), __( 'Sizes no metadata lists, e.g. from old themes, and .webp sidecars.', 'wp-cleanup' ) );
 		$this->card( __( 'Already compliant / skipped', 'wp-cleanup' ), number_format_i18n( $report['compliant'] ) . ' / ' . number_format_i18n( $report['skipped'] ) );
+		if ( isset( $report['unused'], $report['groups'] ) ) {
+			$this->card( __( 'Not used anywhere', 'wp-cleanup' ), number_format_i18n( count( $report['unused'] ) ), __( 'Of all images. See the list below.', 'wp-cleanup' ) );
+			$this->card(
+				__( 'Look-alike groups', 'wp-cleanup' ),
+				number_format_i18n( count( $report['groups'] ) ),
+				/* translators: %d: images in all groups */
+				sprintf( __( '%d images in these groups.', 'wp-cleanup' ), array_sum( array_map( 'count', wp_list_pluck( $report['groups'], 'ids' ) ) ) )
+			);
+		}
 		echo '</div>';
 		if ( $report['reasons'] ) {
 			echo '<details><summary>' . esc_html__( 'Why some images are skipped', 'wp-cleanup' ) . '</summary><ul class="wpcu-details">';
@@ -641,17 +650,27 @@ final class Admin {
 		}
 		if ( ! $report['items'] ) {
 			echo '<div class="wpcu-empty"><p>' . esc_html__( 'Nothing to convert.', 'wp-cleanup' ) . '</p></div>';
+			$this->render_image_usage( $report );
 			return;
 		}
+		$has_usage = isset( $report['use_counts'] );
 
 		echo '<form class="wpcu-media-form">';
-		echo '<div class="wpcu-filters"><input type="search" class="wpcu-filter-search" placeholder="' . esc_attr__( 'Filter by file name…', 'wp-cleanup' ) . '"> <span class="wpcu-visible-count"></span></div>';
-		echo '<table class="widefat striped wpcu-items"><thead><tr><td class="check-column"><input type="checkbox" class="wpcu-check-all" aria-label="' . esc_attr__( 'Select all visible', 'wp-cleanup' ) . '"></td>';
-		echo '<th>' . esc_html__( 'File', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Format', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Size', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Files', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Strays', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Disk', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Result', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
+		echo '<div class="wpcu-filters"><input type="search" class="wpcu-filter-search" placeholder="' . esc_attr__( 'Filter by file name…', 'wp-cleanup' ) . '">';
+		if ( $has_usage ) {
+			echo ' <select class="wpcu-filter-usage" aria-label="' . esc_attr__( 'Filter by use', 'wp-cleanup' ) . '"><option value="all">' . esc_html__( 'Used or not', 'wp-cleanup' ) . '</option><option value="1">' . esc_html__( 'Used somewhere', 'wp-cleanup' ) . '</option><option value="0">' . esc_html__( 'Not used anywhere', 'wp-cleanup' ) . '</option></select>';
+		}
+		echo ' <span class="wpcu-visible-count"></span></div>';
+		echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-items"><thead><tr><td class="check-column"><input type="checkbox" class="wpcu-check-all" aria-label="' . esc_attr__( 'Select all visible', 'wp-cleanup' ) . '"></td>';
+		echo '<th class="wpcu-thumb-col"></th><th>' . esc_html__( 'File', 'wp-cleanup' ) . '</th>' . ( $has_usage ? '<th>' . esc_html__( 'Used in', 'wp-cleanup' ) . '</th>' : '' ) . '<th>' . esc_html__( 'Format', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Size', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Files', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Strays', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Disk', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Result', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
 		foreach ( $report['items'] as $i ) {
-			printf( '<tr data-search="%s" data-id="%d">', esc_attr( strtolower( $i['file'] . ' ' . $i['title'] ) ), (int) $i['id'] );
+			printf( '<tr data-search="%s" data-id="%d" data-used="%d">', esc_attr( strtolower( $i['file'] . ' ' . $i['title'] ) ), (int) $i['id'], empty( $report['use_counts'][ $i['id'] ] ) ? 0 : 1 );
 			echo '<th scope="row" class="check-column"><input type="checkbox" name="ids[]" value="' . esc_attr( $i['id'] ) . '"></th>';
+			echo '<td class="wpcu-thumb-col">' . self::thumb( (int) $i['id'] ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
 			echo '<td class="wpcu-name"><a href="' . esc_url( (string) get_edit_post_link( $i['id'] ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a></td>';
+			if ( $has_usage ) {
+				echo '<td class="wpcu-used">' . self::uses_html( (int) $i['id'], $report ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- uses_html() escapes every part.
+			}
 			echo '<td>' . esc_html( str_replace( 'image/', '', $i['mime'] ) ) . '</td>';
 			echo '<td class="num">' . esc_html( $i['width'] . '×' . $i['height'] ) . '</td>';
 			echo '<td class="num">' . esc_html( number_format_i18n( $i['files'] ) ) . '</td>';
@@ -659,7 +678,7 @@ final class Admin {
 			echo '<td class="num">' . esc_html( size_format( $i['bytes'], 1 ) ) . '</td>';
 			echo '<td class="wpcu-result"></td></tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></div>';
 		echo '<div class="wpcu-actions">';
 		echo '<label><input type="checkbox" class="wpcu-media-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label>';
 		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
@@ -668,8 +687,184 @@ final class Admin {
 		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after this batch', 'wp-cleanup' ) . '</button></p>';
 		echo '<p><progress class="wpcu-media-progress" max="100" value="0" hidden></progress> <span class="wpcu-media-status" aria-live="polite"></span></p>';
 		echo '</div></form>';
+		$this->render_image_usage( $report );
 	}
 
+
+	/**
+	 * Small preview of an image, from its smallest fitting size.
+	 *
+	 * @param int $id   Attachment id.
+	 * @param int $size Displayed edge in px.
+	 */
+	private static function thumb( $id, $size = 48 ) {
+		$src = wp_get_attachment_image_src( $id, array( $size * 2, $size * 2 ) );
+		if ( ! $src ) {
+			return '<span class="wpcu-thumb wpcu-thumb-missing" style="width:' . (int) $size . 'px;height:' . (int) $size . 'px"></span>';
+		}
+		return '<img class="wpcu-thumb" src="' . esc_url( $src[0] ) . '" width="' . (int) $size . '" height="' . (int) $size . '" loading="lazy" decoding="async" alt="">';
+	}
+
+	/**
+	 * Escaped link to a post's edit screen, with its type and (if not published) status.
+	 *
+	 * @param int $post_id Post id.
+	 */
+	private static function post_link( $post_id ) {
+		$post = get_post( $post_id );
+		if ( ! $post ) {
+			/* translators: %d: post id */
+			return esc_html( sprintf( __( 'post #%d (deleted)', 'wp-cleanup' ), $post_id ) );
+		}
+		$title = '' !== trim( $post->post_title ) ? $post->post_title : __( '(no title)', 'wp-cleanup' );
+		$type  = get_post_type_object( $post->post_type );
+		$extra = $type ? $type->labels->singular_name : $post->post_type;
+		if ( 'publish' !== $post->post_status ) {
+			$extra .= ', ' . $post->post_status;
+		}
+		$url = get_edit_post_link( $post_id );
+		return ( $url ? '<a href="' . esc_url( $url ) . '">' . esc_html( $title ) . '</a>' : esc_html( $title ) ) . ' <span class="wpcu-muted">(' . esc_html( $extra ) . ')</span>';
+	}
+
+	/**
+	 * One use of an image, as escaped HTML.
+	 *
+	 * @param array $use Use entry from Media_Usage.
+	 */
+	private static function use_label( array $use ) {
+		switch ( $use['k'] ) {
+			case 'featured':
+				/* translators: %s: post link */
+				return sprintf( esc_html__( 'Featured image of %s', 'wp-cleanup' ), self::post_link( (int) $use['o'] ) );
+			case 'content':
+				/* translators: %s: post link */
+				return sprintf( esc_html__( 'In the content of %s', 'wp-cleanup' ), self::post_link( (int) $use['o'] ) );
+			case 'field':
+				/* translators: 1: field name, 2: post link */
+				return sprintf( esc_html__( 'Field %1$s of %2$s', 'wp-cleanup' ), '<code>' . esc_html( $use['f'] ) . '</code>', self::post_link( (int) $use['o'] ) );
+			case 'term':
+				$term = get_term( (int) $use['o'] );
+				$name = $term && ! is_wp_error( $term ) ? $term->name . ' (' . $term->taxonomy . ')' : '#' . $use['o'];
+				/* translators: 1: field name, 2: term name */
+				return sprintf( esc_html__( 'Field %1$s of the term %2$s', 'wp-cleanup' ), '<code>' . esc_html( $use['f'] ) . '</code>', esc_html( $name ) );
+			default:
+				$name   = (string) $use['o'];
+				$labels = array(
+					'site_icon' => __( 'Site icon', 'wp-cleanup' ),
+					'site_logo' => __( 'Site logo', 'wp-cleanup' ),
+				);
+				if ( isset( $labels[ $name ] ) ) {
+					return esc_html( $labels[ $name ] );
+				}
+				if ( 0 === strpos( $name, 'theme_mods_' ) ) {
+					/* translators: %s: theme folder */
+					return sprintf( esc_html__( 'Customizer settings of the theme %s (logo, header or background)', 'wp-cleanup' ), '<code>' . esc_html( substr( $name, 11 ) ) . '</code>' );
+				}
+				if ( 0 === strpos( $name, 'widget_' ) ) {
+					/* translators: %s: widget type */
+					return sprintf( esc_html__( 'A widget (%s)', 'wp-cleanup' ), '<code>' . esc_html( substr( $name, 7 ) ) . '</code>' );
+				}
+				/* translators: %s: option name */
+				return sprintf( esc_html__( 'Site setting %s', 'wp-cleanup' ), '<code>' . esc_html( $name ) . '</code>' );
+		}
+	}
+
+	/**
+	 * Where an image is used, as escaped HTML: a summary plus the list.
+	 *
+	 * @param int   $id     Attachment id.
+	 * @param array $report Media report.
+	 */
+	private static function uses_html( $id, array $report ) {
+		$count  = isset( $report['use_counts'][ $id ] ) ? (int) $report['use_counts'][ $id ] : 0;
+		$uses   = isset( $report['uses'][ $id ] ) ? $report['uses'][ $id ] : array();
+		$parent = isset( $report['parents'][ $id ] ) ? (int) $report['parents'][ $id ] : 0;
+		$html   = '';
+		if ( ! $count ) {
+			$html .= '<span class="wpcu-badge wpcu-unused">' . esc_html__( 'Not used', 'wp-cleanup' ) . '</span>';
+		} else {
+			/* translators: %d: number of places */
+			$html .= '<details class="wpcu-uses"><summary>' . esc_html( sprintf( _n( 'Used in %d place', 'Used in %d places', $count, 'wp-cleanup' ), $count ) ) . '</summary><ul>';
+			foreach ( $uses as $use ) {
+				$html .= '<li>' . self::use_label( $use ) . '</li>';
+			}
+			if ( $count > count( $uses ) ) {
+				/* translators: %d: number of further places */
+				$html .= '<li class="wpcu-muted">' . esc_html( sprintf( __( '… and %d more', 'wp-cleanup' ), $count - count( $uses ) ) ) . '</li>';
+			}
+			$html .= '</ul></details>';
+		}
+		if ( $parent ) {
+			/* translators: %s: post link */
+			$html .= '<div class="wpcu-attached">' . sprintf( esc_html__( 'Uploaded to %s', 'wp-cleanup' ), self::post_link( $parent ) ) . '</div>';
+		}
+		return $html;
+	}
+
+	/**
+	 * Look-alike groups and images used nowhere.
+	 *
+	 * @param array $report Media report.
+	 */
+	private function render_image_usage( array $report ) {
+		if ( ! isset( $report['groups'], $report['info'] ) ) {
+			echo '<div class="notice notice-info inline"><p>' . esc_html__( 'Check the library again to see where images are used and which look alike.', 'wp-cleanup' ) . '</p></div>';
+			return;
+		}
+		$info = $report['info'];
+
+		echo '<h2>' . esc_html__( 'Look-alike images', 'wp-cleanup' ) . '</h2>';
+		echo '<p class="description wpcu-media-intro">' . esc_html__( 'Images that show the same picture, also when resized, re-compressed or saved in another format. Usually only one copy needs to stay: keep the one in use and remove the others in the Media Library after checking. Nothing is deleted here.', 'wp-cleanup' ) . '</p>';
+		if ( ! empty( $report['hash_left'] ) ) {
+			/* translators: 1: images compared, 2: images left */
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( sprintf( __( 'Compared %1$d images; %2$d are not compared yet. Check the library again to continue: finished images are remembered.', 'wp-cleanup' ), $report['hashed'], $report['hash_left'] ) ) . '</p></div>';
+		}
+		if ( ! $report['groups'] ) {
+			echo '<div class="wpcu-empty"><p>' . esc_html__( 'No look-alike images found.', 'wp-cleanup' ) . '</p></div>';
+		}
+		foreach ( array_slice( $report['groups'], 0, 200 ) as $group ) {
+			echo '<div class="wpcu-dup-group"><div class="wpcu-dup-head">';
+			echo esc_html(
+				sprintf(
+					/* translators: %d: images in the group */
+					_n( '%d image', '%d images', count( $group['ids'] ), 'wp-cleanup' ),
+					count( $group['ids'] )
+				)
+			) . ' · ' . ( $group['identical'] ? esc_html__( 'identical files', 'wp-cleanup' ) : esc_html__( 'look alike', 'wp-cleanup' ) );
+			echo '</div><div class="wpcu-dup-items">';
+			foreach ( $group['ids'] as $id ) {
+				$i = isset( $info[ $id ] ) ? $info[ $id ] : array( 'file' => '#' . $id, 'w' => 0, 'h' => 0, 'bytes' => 0 );
+				echo '<div class="wpcu-dup-item">' . self::thumb( $id, 96 ) . '<div class="wpcu-dup-meta">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+				echo '<a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a>';
+				echo '<div class="wpcu-muted">' . esc_html( $i['w'] . '×' . $i['h'] . ' · ' . size_format( $i['bytes'], 1 ) ) . '</div>';
+				echo self::uses_html( $id, $report ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- uses_html() escapes every part.
+				echo '</div></div>';
+			}
+			echo '</div></div>';
+		}
+		if ( count( $report['groups'] ) > 200 ) {
+			/* translators: %d: groups not shown */
+			echo '<p class="description">' . esc_html( sprintf( __( '%d more groups are not shown.', 'wp-cleanup' ), count( $report['groups'] ) - 200 ) ) . '</p>';
+		}
+
+		echo '<h2>' . esc_html__( 'Not used anywhere', 'wp-cleanup' ) . '</h2>';
+		echo '<p class="description wpcu-media-intro">' . esc_html__( 'Not a featured image, not in any post, page, block, gallery, custom field, term field, widget or site setting. Images can still be used from theme files, CSS, other plugins\' own tables or other websites, so check before removing any.', 'wp-cleanup' ) . '</p>';
+		if ( ! $report['unused'] ) {
+			echo '<div class="wpcu-empty"><p>' . esc_html__( 'Every image is used somewhere.', 'wp-cleanup' ) . '</p></div>';
+			return;
+		}
+		/* translators: %d: images */
+		echo '<details class="wpcu-unused-list"><summary>' . esc_html( sprintf( _n( 'Show %d image', 'Show %d images', count( $report['unused'] ), 'wp-cleanup' ), count( $report['unused'] ) ) ) . '</summary>';
+		echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-items"><thead><tr><th class="wpcu-thumb-col"></th><th>' . esc_html__( 'File', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Size', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Disk', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Uploaded to', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
+		foreach ( $report['unused'] as $id ) {
+			$i = isset( $info[ $id ] ) ? $info[ $id ] : array( 'file' => '#' . $id, 'w' => 0, 'h' => 0, 'bytes' => 0 );
+			echo '<tr><td class="wpcu-thumb-col">' . self::thumb( $id ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+			echo '<td class="wpcu-name"><a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a></td>';
+			echo '<td class="num">' . esc_html( $i['w'] . '×' . $i['h'] ) . '</td><td class="num">' . esc_html( size_format( $i['bytes'], 1 ) ) . '</td>';
+			echo '<td>' . ( ! empty( $report['parents'][ $id ] ) ? self::post_link( (int) $report['parents'][ $id ] ) : '<span class="wpcu-muted">–</span>' ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- post_link() escapes.
+		}
+		echo '</tbody></table></div></details>';
+	}
 
 	private function render_backups() {
 		$backups = Backup::all();

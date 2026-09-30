@@ -97,17 +97,26 @@
 		var runButtons = media.querySelectorAll( '.wpcu-media-run' );
 		var stopRequested = false;
 
+		var mUsage = media.querySelector( '.wpcu-filter-usage' );
 		var mApply = function () {
 			var term = mSearch.value.trim().toLowerCase();
+			var used = mUsage ? mUsage.value : 'all';
 			var visible = 0;
 			mRows.forEach( function ( row ) {
-				var show = ! term || row.getAttribute( 'data-search' ).indexOf( term ) !== -1;
+				var show = ( ! term || row.getAttribute( 'data-search' ).indexOf( term ) !== -1 ) &&
+					( 'all' === used || row.getAttribute( 'data-used' ) === used );
 				row.hidden = ! show;
+				if ( ! show ) {
+					row.querySelector( 'input[type=checkbox]' ).checked = false;
+				}
 				visible += show ? 1 : 0;
 			} );
 			mCount.textContent = visible + ' / ' + mRows.length;
 		};
 		mSearch.addEventListener( 'input', mApply );
+		if ( mUsage ) {
+			mUsage.addEventListener( 'change', mApply );
+		}
 		mApply();
 
 		media.querySelector( '.wpcu-check-all' ).addEventListener( 'change', function ( event ) {

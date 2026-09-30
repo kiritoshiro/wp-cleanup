@@ -53,6 +53,33 @@ Limits:
 - New uploads keep generating every size unless the theme limits them; the ALPS theme does.
 - A small AVIF can get a `-1` suffix (`photo-768x512-1.avif`) when the old JPEG of that name still exists at conversion time.
 
+### Where images are used, look-alikes and unused images
+
+The same check also shows, for **every** image in the library, with a small preview:
+
+- **Where it is used:** as the featured image of a post or page; in content, through its URL at any size (absolute, relative or JSON-escaped), a `wp-image-{id}` class, image/cover/gallery block ids or `[gallery ids=""]`; in custom fields holding its id or URL (Carbon Fields, ACF and similar image fields, and page-builder data); in term fields such as a category image; and in site settings such as the site icon, logo, Customizer header or background, and image widgets. Each place links to its edit screen. "Uploaded to" is shown separately, because uploading an image to a post doesn't mean the post uses it. Revisions, drafts saved automatically and trashed posts don't count.
+- **Look-alike images:** the same picture uploaded more than once, also when resized, re-compressed or saved in another format. Images are compared by a 64-bit perceptual hash of their structure, plus their average colour and shape, so flat graphics or crops aren't mistaken for copies. Each group forms around its oldest image, so a chain of small differences can't pull in unrelated pictures. Groups are marked "identical files" when every file is byte-for-byte the same. Keep the copy that is used, then remove the others in the Media Library.
+- **Not used anywhere:** images none of the above refer to.
+
+Nothing here deletes anything. Only what is stored in the database is visible: an image can still be used from theme files, CSS, another plugin's own tables or another website, so check before removing it.
+
+Hashes are cached in the plugin's data folder, so only new or changed images are read again. On a very large library, a check that runs out of time says so; checking again continues where it stopped. The `wp_cleanup_similarity_budget` filter changes the time budget. `wp cleanup images status` prints the same summary and groups.
+
+## Updates from GitHub
+
+WP Cleanup updates itself from the [GitHub releases](https://github.com/kiritoshiro/wp-cleanup/releases), like a plugin from wordpress.org. New versions appear under **Dashboard → Updates** and on the Plugins screen, "View details" shows the release notes, and WordPress's auto-update toggle works. Before installing, the downloaded ZIP is checked against the SHA-256 checksum GitHub publishes for it; a mismatch stops the update. Only published releases count, never drafts or pre-releases. The check is cached for six hours, and **Check again** on the Updates screen refreshes it.
+
+**No token is needed**, because the repository is public. Only add one if the repository becomes private, or if the server shares its IP address with many sites and hits GitHub's limit of 60 anonymous requests an hour. Then:
+
+1. On GitHub: **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**. Set **Repository access** to *Only select repositories* → `kiritoshiro/wp-cleanup`, **Permissions → Repository permissions → Contents** to *Read-only*, and choose an expiry date.
+2. In `wp-config.php`, above "That's all, stop editing!":
+
+   ```php
+   define( 'WPCU_GITHUB_TOKEN', 'github_pat_…' );
+   ```
+
+The token is only sent to `api.github.com`, never along the download redirect, and it is never stored in the database. Renew it before it expires.
+
 ## How it decides
 
 Each item gets a status, based on evidence in this order:
@@ -119,9 +146,17 @@ bin/test-setup.sh /path/to/throwaway-wordpress "wp"
 cd /path/to/throwaway-wordpress
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/run.php
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images.php   # needs AVIF support
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.php
 ```
 
-The image suite (42 assertions) covers:
+The usage suite (37 assertions) covers:
+- every kind of image use, and revisions, trashed posts and dimension settings not counting
+- look-alike detection: resized and identical copies found; different pictures, flat graphics and crops kept apart; no chaining
+- the updater: release parsing, refusing drafts, pre-releases and foreign packages, digest checks on a real download (a local one, plus the latest GitHub release when online), and "View details" not claiming wordpress.org's unrelated `wp-cleanup`
+
+Run it while the site is served on its own URL (for example with `php -S`) so the local download check can run.
+
+The image suite (45 assertions) covers:
 - inventory, including strays, sidecars and same-name neighbours
 - conversion sizes, the ALPS flag and transparency
 - reference rewriting in HTML, relative URLs, JSON-escaped and serialized data, and `srcset`
