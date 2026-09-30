@@ -231,6 +231,43 @@
 		} );
 	}
 
+	var unused = document.querySelector( '.wpcu-unused-form' );
+	if ( unused ) {
+		var uBoxes = Array.prototype.slice.call( unused.querySelectorAll( 'input[name="ids[]"]' ) );
+		var uCount = unused.querySelector( '.wpcu-unused-count' );
+		var updateUnused = function () {
+			uCount.textContent = uBoxes.filter( function ( box ) { return box.checked; } ).length + ' / 20';
+		};
+		var selectUnused = function ( lookalikes ) {
+			var count = 0;
+			uBoxes.forEach( function ( box ) {
+				box.checked = ! box.disabled && count < 20 && ( ! lookalikes || '1' === box.getAttribute( 'data-lookalike' ) );
+				if ( box.checked ) { count++; }
+			} );
+			updateUnused();
+		};
+		unused.querySelector( '.wpcu-select-lookalikes' ).addEventListener( 'click', function () { selectUnused( true ); } );
+		unused.querySelector( '.wpcu-select-unused' ).addEventListener( 'click', function () { selectUnused( false ); } );
+		unused.querySelector( '.wpcu-clear-unused' ).addEventListener( 'click', function () {
+			uBoxes.forEach( function ( box ) { box.checked = false; } );
+			updateUnused();
+		} );
+		uBoxes.forEach( function ( box ) { box.addEventListener( 'change', updateUnused ); } );
+		updateUnused();
+		unused.addEventListener( 'submit', function ( event ) {
+			var selected = uBoxes.filter( function ( box ) { return box.checked; } ).length;
+			if ( selected < 1 || selected > 20 ) {
+				event.preventDefault();
+				window.alert( wpCleanup.nothing + ' (1–20)' );
+			} else if ( ! unused.querySelector( '.wpcu-unused-confirm' ).checked ) {
+				event.preventDefault();
+				window.alert( wpCleanup.mediaConfirmBox );
+			} else if ( ! window.confirm( wpCleanup.confirmRemove.replace( '%d', selected ) ) ) {
+				event.preventDefault();
+			}
+		} );
+	}
+
 	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-wpcu_restore, .wpcu-wpcu_delete_backup' ), function ( f ) {
 		f.addEventListener( 'submit', function ( event ) {
 			var message = f.classList.contains( 'wpcu-wpcu_restore' ) ? wpCleanup.confirmRestore : wpCleanup.confirmPurge;

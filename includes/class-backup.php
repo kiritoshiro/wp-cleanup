@@ -396,6 +396,9 @@ final class Backup {
 			case 'media':
 				return Media_Converter::restore( $this, $n, $item );
 
+			case 'media_delete':
+				return Media_Remover::restore( $this, $n, $item );
+
 			default:
 				if ( 'table' === $item['type'] && $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $item['id'] ) ) ) ) {
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
