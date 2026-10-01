@@ -60,7 +60,7 @@ final class Admin {
 				'mediaPolicyHash' => md5( wp_json_encode( Media_Policy::settings() ) ),
 				'mediaPolicyUnsaved' => __( 'Save the image policy before converting. Your changes are not active yet.', 'wp-cleanup' ),
 				'mediaPolicyChanged' => __( 'The saved image policy changed. Reload this page before converting.', 'wp-cleanup' ),
-				'confirmMerge'   => __( 'Replace known references to image #%1$d with image #%2$d and move the old copy to a restorable backup? Crops or dimensions may display differently. Confirm you have a recent full site backup.', 'wp-cleanup' ),
+				'confirmMerge'   => __( "Replace known WordPress references to image #%1$d with image #%2$d?\n\nThe image on this card and its files will leave the Media Library and go to a restorable backup. The selected image stays.\n\nCrops or dimensions may display differently. Confirm you have a recent full site backup.", 'wp-cleanup' ),
 				'confirmMedia'   => __( "Convert %d image(s) with the current image policy?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
 				'mediaBadResponse' => __( 'The server returned an invalid response (HTTP %d). The current image may have completed; check the library before retrying.', 'wp-cleanup' ),
@@ -994,25 +994,25 @@ final class Admin {
 			echo '<td class="wpcu-result"></td></tr>';
 		}
 		echo '</tbody></table></div>';
-		echo '<div class="wpcu-actions">';
-		echo '<label><input type="checkbox" class="wpcu-media-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label>';
+		echo '<div class="wpcu-actions wpcu-media-actions">';
+		echo '<label class="wpcu-media-option"><input type="checkbox" class="wpcu-media-confirm"><span><strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></span></label>';
 		$gateway = (int) get_option( Media_Guard::GATEWAY, 0 );
-		echo '<p><label><input type="checkbox" class="wpcu-media-slow"> ' . esc_html__( 'Also try images that may time out', 'wp-cleanup' ) . '</label><br><span class="description">' . esc_html(
+		echo '<div><label class="wpcu-media-option"><input type="checkbox" class="wpcu-media-slow"><span>' . esc_html__( 'Also try images that may time out', 'wp-cleanup' ) . '</span></label><details class="wpcu-media-details"><summary>' . esc_html__( 'How timeouts are handled', 'wp-cleanup' ) . '</summary><p class="description wpcu-media-help">' . esc_html(
 			sprintf(
 				/* translators: 1: seconds per image, 2: how it was determined */
-				__( 'Each image is checked before it is converted: images already converted or still being converted by an earlier request are not converted twice, and images likely to need more than about %1$d s (%2$s) are left for WP-CLI. If the server still times out, the plugin checks whether the image finished before moving on.', 'wp-cleanup' ),
+				__( 'Each image is checked before conversion. Completed or still-running images are skipped. Images estimated to need more than about %1$d s (%2$s) are deferred unless you select the option above. After a timeout, WP Cleanup checks whether the server finished the image.', 'wp-cleanup' ),
 				Media_Guard::budget(),
 				$gateway
 					/* translators: %d: seconds */
 					? sprintf( __( 'this server timed out after %d s before', 'wp-cleanup' ), $gateway )
 					: __( 'a typical proxy limit; no timeout seen yet', 'wp-cleanup' )
 			)
-		) . '</span></p>';
-		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
+		) . '</p></details></div>';
+		echo '<div class="wpcu-media-controls"><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
 		/* translators: %d: images */
-		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button> ';
-		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after this batch', 'wp-cleanup' ) . '</button></p>';
-		echo '<p><progress class="wpcu-media-progress" max="100" value="0" hidden></progress> <span class="wpcu-media-status" aria-live="polite"></span></p>';
+		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button>';
+		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after current image', 'wp-cleanup' ) . '</button></div>';
+		echo '<div class="wpcu-media-feedback"><progress class="wpcu-media-progress" max="100" value="0" hidden></progress><span class="wpcu-media-status" aria-live="polite"></span></div>';
 		echo '</div></form>';
 		$this->render_image_usage( $report );
 		$this->render_file_catalog( $report );
@@ -1198,24 +1198,25 @@ final class Admin {
 				foreach ( $group['ids'] as $id ) {
 					$i        = isset( $info[ $id ] ) ? $info[ $id ] : array( 'file' => '#' . $id, 'w' => 0, 'h' => 0, 'bytes' => 0 );
 					$eligible = isset( $known[ $id ] ) && empty( $report['use_counts'][ $id ] ) && ! Media_Policy::skip_reason( $id );
-					echo '<div class="wpcu-dup-item">' . self::thumb( $id, 96 ) . '<div class="wpcu-dup-meta">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+					echo '<div class="wpcu-dup-item"><div class="wpcu-dup-summary">' . self::thumb( $id, 96 ) . '<div class="wpcu-dup-meta">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
 					echo '<a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a>';
 					echo '<div class="wpcu-muted">' . esc_html( $i['w'] . '×' . $i['h'] . ' · ' . size_format( $i['bytes'], 1 ) ) . '</div>';
 					echo self::uses_html( $id, $report ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- uses_html() escapes every part.
+					echo '</div></div>';
 					if ( ! Media_Policy::skip_reason( $id ) && count( $group['ids'] ) > 1 ) {
-						echo '<div class="wpcu-dup-merge"><label>' . esc_html__( 'Use this image instead:', 'wp-cleanup' ) . ' <select class="wpcu-merge-keeper" aria-label="' . esc_attr( sprintf( __( 'Replacement for image %d', 'wp-cleanup' ), $id ) ) . '">';
+						echo '<div class="wpcu-dup-merge"><label>' . esc_html__( 'Keep this image instead:', 'wp-cleanup' ) . ' <select class="wpcu-merge-keeper" aria-label="' . esc_attr( sprintf( __( 'Replacement for image %d', 'wp-cleanup' ), $id ) ) . '">';
 						foreach ( $group['ids'] as $other_id ) {
 							if ( $other_id !== $id && ! Media_Policy::skip_reason( $other_id ) ) {
 								$other_info = isset( $info[ $other_id ] ) ? $info[ $other_id ] : array( 'file' => '#' . $other_id );
-								echo '<option value="' . (int) $other_id . '">' . esc_html( $other_info['file'] ) . '</option>';
+								echo '<option value="' . (int) $other_id . '">' . esc_html( '#' . $other_id . ' · ' . $other_info['file'] ) . '</option>';
 							}
 						}
-						echo '</select></label> <button type="button" class="button button-small wpcu-merge-image" data-drop="' . (int) $id . '">' . esc_html__( 'Merge and back up this copy', 'wp-cleanup' ) . '</button></div>';
+						echo '</select></label><button type="button" class="button wpcu-merge-image" data-drop="' . (int) $id . '">' . esc_html__( 'Replace this image', 'wp-cleanup' ) . '</button><p class="description">' . esc_html__( 'This card\'s image leaves the Media Library and moves to Backups. The selected image stays.', 'wp-cleanup' ) . '</p></div>';
 					}
 					if ( $eligible ) {
 						echo '<div class="wpcu-dup-remove"><label><input type="checkbox" name="ids[]" form="wpcu-lookalikes-form" value="' . (int) $id . '" data-lookalike="' . ( isset( $recommended[ $id ] ) ? '1' : '0' ) . '"> ' . esc_html__( 'Select for backup', 'wp-cleanup' ) . '</label> <button type="button" class="button button-small wpcu-single-remove" data-id="' . (int) $id . '">' . esc_html__( 'Move this image to backup', 'wp-cleanup' ) . '</button></div>';
 					}
-					echo '</div></div>';
+					echo '</div>';
 				}
 				echo '</div></div>';
 			}
