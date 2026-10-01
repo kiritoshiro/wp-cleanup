@@ -15,6 +15,41 @@ final class Media_Delivery {
 		// Images saved in post content are static HTML, so the filter above never sees them.
 		// After WordPress adds srcset (priority 12), wrap them the same way.
 		add_filter( 'the_content', array( __CLASS__, 'content' ), 20 );
+		// WordPress deletes the main file and sizes; the JPEG fallback is a sidecar it does not know.
+		add_action( 'delete_attachment', array( __CLASS__, 'delete_fallback' ) );
+	}
+
+	/**
+	 * Remove an attachment's recorded JPEG fallback with it. WP Cleanup's own
+	 * removals move every file into a backup set first, so nothing is left here then.
+	 *
+	 * @param int $id Attachment id.
+	 */
+	public static function delete_fallback( $id ) {
+		$outputs = get_post_meta( (int) $id, Media_Policy::OUTPUT_META, true );
+		$rel     = is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ? ltrim( wp_normalize_path( (string) $outputs['jpeg'] ), '/' ) : '';
+		if ( '' === $rel || false !== strpos( $rel, ':' ) || preg_match( '#(^|/)\.\.(/|$)#', $rel ) ) {
+			return;
+		}
+		$path = wp_normalize_path( wp_upload_dir( null, false )['basedir'] ) . '/' . $rel;
+		if ( ! is_file( $path ) || is_link( $path ) ) {
+			return;
+		}
+		// Never remove a file that another attachment uses as its own.
+		$other = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'any',
+				'posts_per_page' => 1,
+				'fields'         => 'ids',
+				'post__not_in'   => array( (int) $id ),
+				'meta_key'       => '_wp_attached_file', // phpcs:ignore WordPress.DB.SlowDBQuery -- One indexed lookup on delete.
+				'meta_value'     => $rel, // phpcs:ignore WordPress.DB.SlowDBQuery -- One indexed lookup on delete.
+			)
+		);
+		if ( ! $other ) {
+			wp_delete_file( $path );
+		}
 	}
 
 	/**

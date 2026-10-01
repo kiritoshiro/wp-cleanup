@@ -908,6 +908,13 @@ final class Admin {
 			echo ' ' . esc_html__( 'The sizes above differ from ALPS (alps-small, 1920/768 px), so no marker is set.', 'wp-cleanup' );
 		}
 		echo '</p>';
+		if ( ! empty( $alps['converts_uploads'] ) ) {
+			echo '<p class="description">' . esc_html(
+				Media_Policy::alps_compatible( $s )
+					? __( 'The theme converts new uploads itself with this policy (full AVIF, small AVIF and one JPEG fallback) and serves them as AVIF with the JPEG for older browsers. New uploads therefore show as already converted here; this page is for older images.', 'wp-cleanup' )
+					: __( 'The theme converts new uploads itself with its own ALPS sizes, because the sizes above differ from ALPS. Those uploads will be listed here as needing conversion.', 'wp-cleanup' )
+			) . '</p>';
+		}
 		submit_button( __( 'Save policy', 'wp-cleanup' ), 'secondary', 'submit', false );
 		echo '</form></details>';
 

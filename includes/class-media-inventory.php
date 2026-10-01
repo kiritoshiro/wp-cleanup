@@ -134,8 +134,11 @@ final class Media_Inventory {
 	private static function is_compliant( $id, array $meta, array $files ) {
 		$s = Media_Policy::settings();
 		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+		// The ALPS theme keeps a new upload's original for seven days, then deletes it itself.
+		$retained = self::alps_retained_original( $id, $meta );
+		$allowed  = $retained ? array( 'original' ) : array();
 		if ( $s['jpeg_fallback'] && is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
-			if ( ! empty( $meta['original_image'] ) || ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) || Media_Policy::encoding_policy( $outputs['policy'] ) != Media_Policy::encoding_policy( $s ) ) { // phpcs:ignore -- compare policy arrays.
+			if ( ( ! empty( $meta['original_image'] ) && ! $retained ) || ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) || Media_Policy::encoding_policy( $outputs['policy'] ) != Media_Policy::encoding_policy( $s ) ) { // phpcs:ignore -- compare policy arrays.
 				return false;
 			}
 			$has_avif = ! empty( $outputs['avif_full'] );
@@ -164,13 +167,13 @@ final class Media_Inventory {
 				}
 			}
 			foreach ( $files as $file ) {
-				if ( ! in_array( $file['role'], array( 'attached', 'size', 'jpeg_fallback', 'avif_full', 'avif_small' ), true ) ) {
+				if ( ! in_array( $file['role'], array_merge( array( 'attached', 'size', 'jpeg_fallback', 'avif_full', 'avif_small' ), $allowed ), true ) ) {
 					return false;
 				}
 			}
 			return true; // The ALPS marker is kept in sync by Media_Integrity without re-encoding.
 		}
-		if ( ! $s['jpeg_fallback'] && 'image/avif' === get_post_mime_type( $id ) && empty( $meta['original_image'] ) && max( (int) ( isset( $meta['width'] ) ? $meta['width'] : 0 ), (int) ( isset( $meta['height'] ) ? $meta['height'] : 0 ) ) <= $s['full_max'] ) {
+		if ( ! $s['jpeg_fallback'] && 'image/avif' === get_post_mime_type( $id ) && ( empty( $meta['original_image'] ) || $retained ) && max( (int) ( isset( $meta['width'] ) ? $meta['width'] : 0 ), (int) ( isset( $meta['height'] ) ? $meta['height'] : 0 ) ) <= $s['full_max'] ) {
 			if ( is_array( $outputs ) && ( ! empty( $outputs['jpeg'] ) || ( isset( $outputs['policy'] ) && is_array( $outputs['policy'] ) && Media_Policy::encoding_policy( $outputs['policy'] ) != Media_Policy::encoding_policy( $s ) ) ) ) { // phpcs:ignore -- compare policy arrays.
 				return false;
 			}
@@ -179,13 +182,28 @@ final class Media_Inventory {
 				return false;
 			}
 			foreach ( $files as $file ) {
-				if ( ! in_array( $file['role'], array( 'attached', 'size' ), true ) ) {
+				if ( ! in_array( $file['role'], array_merge( array( 'attached', 'size' ), $allowed ), true ) ) {
 					return false;
 				}
 			}
 			return true; // The ALPS marker is kept in sync by Media_Integrity without re-encoding.
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the ALPS theme's retention queue owns this attachment's original:
+	 * it deletes `original_image` itself a week after upload.
+	 *
+	 * @param int   $id   Attachment id.
+	 * @param array $meta Metadata.
+	 */
+	private static function alps_retained_original( $id, array $meta ) {
+		if ( empty( $meta['original_image'] ) || ! get_post_meta( $id, '_alps_original_delete_after', true ) ) {
+			return false;
+		}
+		$queued = (string) get_post_meta( $id, '_alps_retained_original', true );
+		return '' !== $queued && wp_basename( $queued ) === wp_basename( (string) $meta['original_image'] );
 	}
 
 	/**

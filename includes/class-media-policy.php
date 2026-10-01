@@ -103,6 +103,8 @@ final class Media_Policy {
 		return array(
 			'active' => (bool) $active,
 			'label'  => trim( $label ),
+			// ALPS 3.29+ makes the full AVIF, small AVIF and JPEG fallback itself and records them in OUTPUT_META.
+			'converts_uploads' => (bool) $active && method_exists( 'App\\UploadImages', 'fallback' ),
 		);
 	}
 
