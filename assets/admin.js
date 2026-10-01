@@ -97,6 +97,7 @@
 		var runButtons = media.querySelectorAll( '.wpcu-media-run' );
 		var initiallyDisabled = Array.prototype.map.call( runButtons, function ( button ) { return button.disabled; } );
 		var stopRequested = false;
+		var slowBox = media.querySelector( '.wpcu-media-slow' );
 		var policyForm = document.querySelector( '.wpcu-policy-form' );
 		var policyDirty = false;
 		if ( policyForm ) {
@@ -155,26 +156,41 @@
 			progress.hidden = false;
 		};
 
-		var post = function ( ids, backup ) {
+		// Resolves to { json } or, when the server or a proxy sent no JSON (502/504, a dropped connection), { lost, httpStatus, waited }.
+		var request = function ( action, fields ) {
 			var body = new URLSearchParams();
-			body.append( 'action', 'wpcu_media_batch' );
+			body.append( 'action', action );
 			body.append( '_ajax_nonce', wpCleanup.mediaNonce );
 			body.append( 'policy', wpCleanup.mediaPolicyHash );
-			body.append( 'backup', backup || '' );
-			ids.forEach( function ( id ) {
-				body.append( 'ids[]', id );
-			} );
-			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( response ) {
-				return response.text().then( function ( raw ) {
-					var json;
-					try {
-						json = JSON.parse( raw );
-					} catch ( error ) {
-						throw new Error( wpCleanup.mediaBadResponse.replace( '%d', response.status ) );
-					}
-					return json;
+			Object.keys( fields ).forEach( function ( key ) {
+				[].concat( fields[ key ] ).forEach( function ( value ) {
+					body.append( key, value );
 				} );
 			} );
+			var started = Date.now();
+			var lost = function ( status ) {
+				return { lost: true, httpStatus: status, waited: Math.round( ( Date.now() - started ) / 1000 ) };
+			};
+			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( response ) {
+				return response.text().then( function ( raw ) {
+					try {
+						return { json: JSON.parse( raw ) };
+					} catch ( error ) {
+						return lost( response.status );
+					}
+				} );
+			}, function () {
+				return lost( 0 );
+			} );
+		};
+		var post = function ( ids, backup ) {
+			return request( 'wpcu_media_batch', { backup: backup || '', 'ids[]': ids } );
+		};
+		var check = function ( id, backup, slow, waited ) {
+			return request( 'wpcu_media_check', { id: id, backup: backup || '', slow: slow ? '1' : '', waited: waited || '' } );
+		};
+		var pause = function ( ms ) {
+			return new Promise( function ( resolve ) { window.setTimeout( resolve, ms ); } );
 		};
 
 		// "1920×1280 · AVIF · 58.3 KB" for a file info object from the server.
@@ -251,23 +267,112 @@
 				setBusy( true );
 				progress.max = total;
 
+				var deferred = [];
+				var summary = function () {
+					var text = wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' );
+					if ( deferred.length ) {
+						text += ' ' + wpCleanup.mediaDeferred.replace( '%1$d', deferred.length ).replace( '%2$s', 'wp cleanup images convert --ids=' + deferred.join( ',' ) );
+					}
+					return text;
+				};
 				var finish = function ( message ) {
 					setBusy( false );
-					status.textContent = message;
+					status.textContent = message === wpCleanup.mediaStopped ? message + ' ' + summary() : message;
 				};
 
 				var next = function () {
 					if ( stopRequested ) {
-						finish( wpCleanup.mediaStopped + ' ' + wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
+						finish( wpCleanup.mediaStopped );
 						return;
 					}
 					var chunk = ids.slice( done, done + 1 );
 					if ( ! chunk.length ) {
-						finish( wpCleanup.mediaDone.replace( '%1$d', tally.converted ).replace( '%2$d', tally.failed ).replace( '%3$d', tally.other ).replace( '%4$s', backup || '—' ) );
+						finish( summary() );
 						return;
 					}
 					status.textContent = done + ' / ' + total + '…';
-					post( chunk, backup ).then( function ( json ) {
+					var id = chunk[ 0 ];
+					var advance = function () {
+						done += 1;
+						progress.value = done;
+						next();
+					};
+					var mark = function ( r ) {
+						var row = media.querySelector( 'tr[data-id="' + r.id + '"]' );
+						if ( row ) {
+							row.querySelector( '.wpcu-result' ).textContent = r.status + ': ' + r.message;
+							row.classList.add( 'wpcu-row-' + r.status );
+							var box = row.querySelector( 'input[type=checkbox]' );
+							box.checked = false;
+							box.disabled = 'converted' === r.status;
+						}
+						if ( 'converted' === r.status ) {
+							tally.converted++;
+						} else if ( 'failed' === r.status ) {
+							tally.failed++;
+						} else {
+							tally.other++;
+						}
+					};
+					var serverError = function ( result ) {
+						return result.json && result.json.data && result.json.data.message ? result.json.data.message : 'Request failed.';
+					};
+					var waitedTotal = 0;
+					// Ask the server about this image until it is no longer being converted. After a lost answer, `lostAfter` is how long that request ran.
+					var settle = function ( lostAfter ) {
+						if ( stopRequested ) { return Promise.resolve( null ); }
+						return check( id, backup, slowBox && slowBox.checked, lostAfter ).then( function ( result ) {
+							if ( result.lost ) {
+								return pause( 5000 ).then( function () { waitedTotal += 5; return waitedTotal > 1200 ? { giveUp: true } : settle( lostAfter ? 1 : 0 ); } );
+							}
+							if ( ! result.json.success ) { throw new Error( serverError( result ) ); }
+							var c = result.json.data;
+							if ( c.backup ) { backup = c.backup; }
+							if ( 'busy' !== c.state ) { return c; }
+							status.textContent = wpCleanup.mediaWaiting.replace( '%1$d', id ).replace( '%2$d', waitedTotal );
+							return pause( 5000 ).then( function () { waitedTotal += 5; return waitedTotal > 1200 ? { giveUp: true } : settle( lostAfter ? 1 : 0 ); } );
+						} );
+					};
+					// Outcome of a check that did not lead to a conversion request.
+					var settled = function ( c, afterLoss ) {
+						if ( afterLoss && 'done' === c.state ) {
+							mark( { id: id, status: 'converted', message: wpCleanup.mediaFinishedLate } );
+						} else if ( afterLoss && 'ready' === c.state ) {
+							mark( { id: id, status: 'failed', message: wpCleanup.mediaNotFinished } );
+						} else if ( 'done' === c.state ) {
+							mark( { id: id, status: 'compliant', message: c.message } );
+						} else if ( 'interrupted' === c.state ) {
+							mark( { id: id, status: 'failed', message: c.message } );
+						} else if ( 'risky' === c.state ) {
+							deferred.push( id );
+							mark( { id: id, status: 'deferred', message: c.message } );
+						} else {
+							mark( { id: id, status: 'skipped', message: c.message } );
+						}
+						advance();
+					};
+					var recover = function ( lostResult ) {
+						status.textContent = wpCleanup.mediaTimedOut.replace( '%1$d', lostResult.httpStatus ).replace( '%2$d', lostResult.waited ).replace( '%3$d', id );
+						// Only a gateway answer (or a dropped connection) says something about the server's time limit.
+						var waited = -1 === [ 0, 502, 503, 504, 524 ].indexOf( lostResult.httpStatus ) ? 0 : Math.max( 1, lostResult.waited );
+						return settle( waited || 1 ).then( function ( c ) {
+							if ( ! c ) { finish( wpCleanup.mediaStopped ); return; }
+							if ( c.giveUp ) { finish( wpCleanup.mediaGiveUp ); return; }
+							settled( c, true );
+						} );
+					};
+					settle( 0 ).then( function ( c ) {
+						if ( ! c ) { finish( wpCleanup.mediaStopped ); return; }
+						if ( c.giveUp ) { finish( wpCleanup.mediaGiveUp ); return; }
+						if ( 'ready' !== c.state ) { settled( c, false ); return; }
+						return post( chunk, backup ).then( function ( result ) {
+							if ( result.lost ) { return recover( result ); }
+							handle( result.json );
+						} );
+					} ).catch( function ( error ) {
+						finish( String( error && error.message ? error.message : error ) );
+					} );
+					var handle = function ( json ) {
 						if ( ! json || ! json.success ) {
 							finish( ( json && json.data && json.data.message ) || 'Request failed.' );
 							return;
@@ -299,12 +404,8 @@
 								tally.other++;
 							}
 						} );
-						done += chunk.length;
-						progress.value = done;
-						next();
-					} ).catch( function ( error ) {
-						finish( String( error ) );
-					} );
+						advance();
+					};
 				};
 				next();
 			} );

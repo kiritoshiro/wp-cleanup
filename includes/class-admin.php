@@ -29,6 +29,7 @@ final class Admin {
 		add_action( 'admin_post_wpcu_media_merge', array( $this, 'handle_media_merge' ) );
 		add_action( 'admin_post_wpcu_media_file_remove', array( $this, 'handle_media_file_remove' ) );
 		add_action( 'wp_ajax_wpcu_media_batch', array( $this, 'ajax_media_batch' ) );
+		add_action( 'wp_ajax_wpcu_media_check', array( $this, 'ajax_media_check' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( WPCU_FILE ), array( $this, 'action_links' ) );
 	}
 
@@ -63,6 +64,15 @@ final class Admin {
 				'confirmMedia'   => __( "Convert %d image(s) with the current image policy?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
 				'mediaBadResponse' => __( 'The server returned an invalid response (HTTP %d). The current image may have completed; check the library before retrying.', 'wp-cleanup' ),
+				/* translators: 1: HTTP status, 2: seconds, 3: attachment id */
+				'mediaTimedOut' => __( 'The server did not answer in time (HTTP %1$d after %2$d s). Checking whether image #%3$d finished on the server…', 'wp-cleanup' ),
+				/* translators: 1: attachment id, 2: seconds */
+				'mediaWaiting' => __( 'Image #%1$d is still being converted on the server (%2$d s). Waiting…', 'wp-cleanup' ),
+				'mediaFinishedLate' => __( 'Converted. The server finished after the connection timed out, so file details are not shown here; see the backup set on the Backups tab.', 'wp-cleanup' ),
+				'mediaNotFinished' => __( 'Not converted: the server stopped before finishing. The image data still matches its files, so it can be converted again. Partly written new files, if any, show up under files without an attachment.', 'wp-cleanup' ),
+				/* translators: 1: number of images, 2: WP-CLI command */
+				'mediaDeferred' => __( '%1$d image(s) were not converted because they may take longer than this server allows for one request. Convert them with WP-CLI (%2$s) or tick "Also try images that may time out".', 'wp-cleanup' ),
+				'mediaGiveUp' => __( 'The server is still busy with this image after a long wait. Stopped; check the library and the Backups tab before retrying.', 'wp-cleanup' ),
 				'mediaLocation' => __( 'Location', 'wp-cleanup' ),
 				'mediaOriginal' => __( 'Original', 'wp-cleanup' ),
 				'mediaNew' => __( 'New', 'wp-cleanup' ),
@@ -755,6 +765,49 @@ final class Admin {
 		$this->back( array( 'tab' => 'images' ) );
 	}
 
+	/**
+	 * Check one image before converting it, or after its request ended
+	 * without an answer (HTTP 502/504 from a proxy while PHP kept working).
+	 */
+	public function ajax_media_check() {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			wp_send_json_error( array( 'message' => __( 'You are not allowed to do this.', 'wp-cleanup' ) ), 403 );
+		}
+		check_ajax_referer( 'wpcu_media_batch' );
+		$id          = isset( $_POST['id'] ) ? absint( wp_unslash( $_POST['id'] ) ) : 0;
+		$bid         = isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '';
+		$policy_hash = isset( $_POST['policy'] ) ? sanitize_text_field( wp_unslash( $_POST['policy'] ) ) : '';
+		$slow        = ! empty( $_POST['slow'] );
+		$waited      = isset( $_POST['waited'] ) ? absint( wp_unslash( $_POST['waited'] ) ) : 0;
+		if ( ! $id ) {
+			wp_send_json_error( array( 'message' => __( 'Select at least one item.', 'wp-cleanup' ) ), 400 );
+		}
+		if ( ! hash_equals( md5( wp_json_encode( Media_Policy::settings() ) ), $policy_hash ) ) {
+			wp_send_json_error( array( 'message' => __( 'The saved image policy changed. Reload this page before converting.', 'wp-cleanup' ) ), 409 );
+		}
+		if ( $waited ) {
+			Media_Guard::gateway_failed( $waited );
+		}
+		try {
+			$check = Media_Guard::preflight( $id, $slow, $waited > 0 );
+			if ( in_array( $check['state'], array( 'done', 'interrupted' ), true ) ) {
+				Media_Report::forget( array( $id ) );
+				Media_Report::refresh_issues( array( $id ) );
+			}
+			// Open the backup set before the first conversion, so its id survives a request that times out.
+			if ( 'ready' === $check['state'] ) {
+				$backup = '' !== $bid ? Backup::open( $bid ) : Backup::start();
+				if ( ! $backup ) {
+					throw new \RuntimeException( __( 'Backup set not found.', 'wp-cleanup' ) );
+				}
+				$check['backup'] = $backup->id;
+			}
+			wp_send_json_success( $check );
+		} catch ( \Exception $e ) {
+			wp_send_json_error( array( 'message' => $e->getMessage() ), 500 );
+		}
+	}
+
 	public function ajax_media_batch() {
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 300 ); // phpcs:ignore -- One image may take longer than the normal web request.
@@ -943,6 +996,18 @@ final class Admin {
 		echo '</tbody></table></div>';
 		echo '<div class="wpcu-actions">';
 		echo '<label><input type="checkbox" class="wpcu-media-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label>';
+		$gateway = (int) get_option( Media_Guard::GATEWAY, 0 );
+		echo '<p><label><input type="checkbox" class="wpcu-media-slow"> ' . esc_html__( 'Also try images that may time out', 'wp-cleanup' ) . '</label><br><span class="description">' . esc_html(
+			sprintf(
+				/* translators: 1: seconds per image, 2: how it was determined */
+				__( 'Each image is checked before it is converted: images already converted or still being converted by an earlier request are not converted twice, and images likely to need more than about %1$d s (%2$s) are left for WP-CLI. If the server still times out, the plugin checks whether the image finished before moving on.', 'wp-cleanup' ),
+				Media_Guard::budget(),
+				$gateway
+					/* translators: %d: seconds */
+					? sprintf( __( 'this server timed out after %d s before', 'wp-cleanup' ), $gateway )
+					: __( 'a typical proxy limit; no timeout seen yet', 'wp-cleanup' )
+			)
+		) . '</span></p>';
 		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
 		/* translators: %d: images */
 		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button> ';
