@@ -69,6 +69,56 @@ final class Media_Policy {
 	}
 
 	/**
+	 * Whether the policy matches the ALPS theme's own upload policy, which the
+	 * marker promises: full <= 1920 px and an optional "alps-small" <= 768 px.
+	 * ALPS marks single-size uploads too ("small sources may need only one display
+	 * file"), and the marker keeps thumbnail regeneration from re-creating old sizes.
+	 *
+	 * @param array|null $s Settings.
+	 */
+	public static function alps_compatible( $s = null ) {
+		$s = $s ? $s : self::settings();
+		return 'alps-small' === $s['small_name'] && $s['full_max'] <= 1920 && $s['small_max'] <= 768;
+	}
+
+	/**
+	 * Whether converted images should carry the ALPS marker.
+	 *
+	 * @param array|null $s Settings.
+	 */
+	public static function wants_flag( $s = null ) {
+		$s = $s ? $s : self::settings();
+		return $s['set_flag'] && self::alps_compatible( $s );
+	}
+
+	/**
+	 * Whether the active theme runs the ALPS two-size image policy.
+	 *
+	 * @return array{active:bool,label:string}
+	 */
+	public static function alps_theme() {
+		$theme  = wp_get_theme();
+		$active = class_exists( 'App\\UploadImages' ) || has_filter( 'image_downsize', array( 'App\\UploadImages', 'downsize' ) );
+		$label  = $theme->exists() ? $theme->get( 'Name' ) . ' ' . $theme->get( 'Version' ) : '';
+		return array(
+			'active' => (bool) $active,
+			'label'  => trim( $label ),
+		);
+	}
+
+	/**
+	 * Policy fields that change the generated files. The marker is a database
+	 * flag only, so toggling it must never cause images to be re-encoded.
+	 *
+	 * @param array $s Settings.
+	 * @return array
+	 */
+	public static function encoding_policy( array $s ) {
+		unset( $s['set_flag'] );
+		return $s;
+	}
+
+	/**
 	 * Whether this server's image editor can write AVIF.
 	 */
 	public static function avif_supported() {

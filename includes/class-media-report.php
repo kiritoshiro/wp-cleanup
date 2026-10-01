@@ -90,12 +90,40 @@ final class Media_Report {
 			Media_Inventory::flush();
 		} while ( $page['ids'] );
 
+		if ( null === $limit ) {
+			// Saved data that disagrees with the files (wrong paths, sizes, markers...).
+			$report['issues'] = Media_Integrity::scan( $all );
+		}
 		if ( null === $limit && $details ) {
 			$report = array_merge( $report, self::usage_and_likeness( $all, $start ) );
 			$report['file_catalog'] = Media_Files::catalog( $all );
 		}
 		$report['duration'] = round( microtime( true ) - $start, 2 );
 		return $report;
+	}
+
+	/**
+	 * Re-check the given attachments for saved-data problems and update the stored report.
+	 *
+	 * @param int[] $ids Attachment ids.
+	 */
+	public static function refresh_issues( array $ids ) {
+		$report = self::last();
+		if ( ! $report ) {
+			return;
+		}
+		$issues = isset( $report['issues'] ) ? (array) $report['issues'] : array();
+		foreach ( array_map( 'intval', $ids ) as $id ) {
+			unset( $issues[ $id ], $issues[ (string) $id ] );
+			if ( get_post( $id ) ) {
+				$r = Media_Integrity::check( $id );
+				if ( $r['issues'] ) {
+					$issues[ $id ] = $r['issues'];
+				}
+			}
+		}
+		$report['issues'] = $issues;
+		Storage::write_json( self::FILE, $report );
 	}
 
 	/**
