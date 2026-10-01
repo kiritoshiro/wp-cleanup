@@ -25,6 +25,45 @@ final class Media_Converter {
 	 * @return array{id:int,status:string,message:string,files:int,bytes_before:int,bytes_after:int}
 	 */
 	public static function convert( $id, $backup = null, $dry_run = false ) {
+		if ( $dry_run || ! $backup instanceof Backup ) {
+			return self::convert_unlocked( $id, $backup, $dry_run );
+		}
+		$id = (int) $id;
+		// A gateway may have given up on an earlier request that is still converting this image.
+		if ( ! Media_Guard::lock( $id, $backup->id ) ) {
+			return array(
+				'id'                => $id,
+				'status'            => 'busy',
+				'message'           => __( 'Another request is still converting this image. Wait for it to finish, then check the library.', 'wp-cleanup' ),
+				'files'             => 0,
+				'bytes_before'      => 0,
+				'bytes_after'       => 0,
+				'reference_changes' => array(),
+				'backed_up'         => array(),
+			);
+		}
+		try {
+			$work    = Media_Guard::work( $id );
+			$started = microtime( true );
+			$result  = self::convert_unlocked( $id, $backup, false );
+			if ( 'converted' === $result['status'] ) {
+				Media_Guard::record( microtime( true ) - $started, $work['work'] );
+			}
+			return $result;
+		} finally {
+			Media_Guard::unlock( $id );
+		}
+	}
+
+	/**
+	 * Convert without taking the per-image lock (see convert()).
+	 *
+	 * @param int         $id      Attachment id.
+	 * @param Backup|null $backup  Backup set.
+	 * @param bool        $dry_run Only report.
+	 * @return array
+	 */
+	private static function convert_unlocked( $id, $backup, $dry_run ) {
 		global $wpdb;
 		$id     = (int) $id;
 		$s      = Media_Policy::settings();
@@ -329,7 +368,7 @@ final class Media_Converter {
 	}
 
 	/** Select the best original image available for both encoders. */
-	private static function source( $id, array $inv ) {
+	public static function source( $id, array $inv ) {
 		$source = wp_normalize_path( get_attached_file( $id, true ) );
 		if ( ! $inv['edited'] && ! empty( $inv['meta']['original_image'] ) && is_file( $inv['dir'] . '/' . wp_basename( $inv['meta']['original_image'] ) ) ) {
 			$source = $inv['dir'] . '/' . wp_basename( $inv['meta']['original_image'] );

@@ -397,6 +397,15 @@ final class CLI {
 		$backup = $dry ? null : Backup::start();
 		$tally  = array( 'converted' => 0, 'failed' => 0, 'before' => 0, 'after' => 0 );
 		foreach ( $ids as $id ) {
+			if ( ! $dry ) {
+				// WP-CLI has no gateway time limit, but an earlier web request may still hold or have abandoned this image.
+				$check = Media_Guard::preflight( $id, true );
+				if ( in_array( $check['state'], array( 'busy', 'interrupted' ), true ) ) {
+					\WP_CLI::log( sprintf( '#%d %-9s %s', $id, $check['state'], $check['message'] ) );
+					++$tally['failed'];
+					continue;
+				}
+			}
 			$r = Media_Converter::convert( $id, $backup, $dry );
 			\WP_CLI::log( sprintf( '#%d %-9s %s', $id, $r['status'], $r['message'] ) );
 			if ( 'converted' === $r['status'] ) {

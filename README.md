@@ -67,6 +67,17 @@ Every library check also compares each image's saved WordPress data with its fil
 
 **Repair** fixes these by changing only WordPress data, never image files. Each image is re-checked first, and each repair can be undone from **Backups** unless the image changed since. Problems that need a person, such as a main file missing from disk, are listed separately and never "repaired". `wp cleanup images repair [--dry-run]` does the same from WP-CLI.
 
+### Timeouts (HTTP 502/504) while converting
+
+On many hosts a proxy (nginx, Cloudflare, a load balancer) gives up on a request after about 60–100 s and answers 502 or 504, while PHP carries on converting the image. In the browser, each image is converted in its own request, and the plugin checks the image first:
+
+- **Already converted, or skipped:** it is not converted again.
+- **Still being converted by an earlier request:** each image has a lock, and the browser waits for it to clear.
+- **Stopped part way:** the lock is stale, or the request was killed, and the image data no longer matches its files. The image is reported so you can use Repair or restore it.
+- **Likely to take too long:** the estimate is based on this server's recent conversion times and the shortest wait that ended in a timeout. It also covers images too large for PHP memory when GD is used. These images are left for `wp cleanup images convert --ids=…`, unless you tick **Also try images that may time out**.
+
+If a request still ends without an answer, the browser asks the server whether that image finished, then reports it as converted or not converted and continues with the next one. A finished image's file details are then only shown on the Backups tab. All images in one run go into the same backup set, even across a timeout. The budget can be changed with the `wpcu_media_request_budget` filter.
+
 ### Current files on the server
 
 In **Look-alike images**, choose which image to keep and merge another used copy into it. The plugin redirects known WordPress URLs and image IDs, backs up the redundant attachment and its files, and refuses the merge if a use remains. Crops and resolutions may display differently after merging; check the preview and the site. Theme files, CSS, plugin tables and external sites are outside the reference scan. A merge can be restored as one item from **Backups**.
@@ -172,6 +183,7 @@ WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/run.ph
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images.php   # needs AVIF support
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.php
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/integrity.php   # data check, ALPS marker, file details; set WPCU_ALPS_DIR to test against the real ALPS image code
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/guard.php   # per-image lock, check before converting, timeout recovery
 ```
 
 The usage suite (48 assertions) covers:
