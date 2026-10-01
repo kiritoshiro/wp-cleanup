@@ -8,7 +8,7 @@ updates:
   cooldown:
     default-days: 7
 - package-ecosystem: composer
-  directory: /github/security
+  directory: /.github/security
   schedule:
     interval: monthly
   open-pull-requests-limit: 2
