@@ -12,6 +12,34 @@ defined( 'ABSPATH' ) || exit;
 final class Media_Delivery {
 	public static function register() {
 		add_filter( 'wp_get_attachment_image', array( __CLASS__, 'picture' ), 10, 3 );
+		// Images saved in post content are static HTML, so the filter above never sees them.
+		// After WordPress adds srcset (priority 12), wrap them the same way.
+		add_filter( 'the_content', array( __CLASS__, 'content' ), 20 );
+	}
+
+	/**
+	 * Give block/classic images in post content the same AVIF + JPEG picture markup.
+	 * Images already inside a <picture> are left alone.
+	 *
+	 * @param string $content Post content HTML.
+	 * @return string
+	 */
+	public static function content( $content ) {
+		if ( is_admin() || is_feed() || ! is_string( $content ) || false === stripos( $content, 'wp-image-' ) ) {
+			return $content;
+		}
+		return (string) preg_replace_callback(
+			'~<picture\b.*?</picture>|<img\b[^>]*>~is',
+			static function ( $m ) {
+				$tag = $m[0];
+				if ( 0 === stripos( $tag, '<picture' ) || ! preg_match( '/\bwp-image-(\d+)\b/', $tag, $id ) ) {
+					return $tag;
+				}
+				$size = preg_match( '/\bsize-([a-z0-9_-]+)\b/i', $tag, $named ) ? $named[1] : 'full';
+				return self::picture( $tag, (int) $id[1], $size );
+			},
+			$content
+		);
 	}
 
 	/** Wrap WordPress-generated attachment images in a picture element. */
@@ -30,23 +58,6 @@ final class Media_Delivery {
 			$sizes = html_entity_decode( $match[1], ENT_QUOTES, 'UTF-8' );
 		} elseif ( preg_match( '/\\bwidth="(\\d+)"/', $html, $match ) ) {
 			$sizes = (int) $match[1] . 'px';
-		}
-		$limit = 0;
-		if ( is_array( $size ) ) {
-			$limit = isset( $size[0] ) ? (int) $size[0] : 0;
-		} elseif ( is_string( $size ) ) {
-			$policy = Media_Policy::settings();
-			$named = array(
-				'thumbnail' => (int) get_option( 'thumbnail_size_w', 150 ),
-				'medium' => (int) get_option( 'medium_size_w', 300 ),
-				'medium_large' => (int) get_option( 'medium_large_size_w', 768 ),
-				'large' => (int) get_option( 'large_size_w', 1024 ),
-				$policy['small_name'] => (int) $policy['small_max'],
-			);
-			$limit = isset( $named[ $size ] ) ? $named[ $size ] : 0;
-		}
-		if ( $limit > 0 ) {
-			$sizes = '(max-width: ' . $limit . 'px) 100vw, ' . $limit . 'px';
 		}
 		$limit = 0;
 		if ( is_array( $size ) ) {

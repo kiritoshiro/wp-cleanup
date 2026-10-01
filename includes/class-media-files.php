@@ -12,6 +12,60 @@ defined( 'ABSPATH' ) || exit;
 final class Media_Files {
 	const LIST_LIMIT = 2000;
 
+	/** @var array<string,array> describe() cache for this request, keyed by path + mtime + size. */
+	private static $described = array();
+
+	/**
+	 * Real size, dimensions and format of one image file.
+	 *
+	 * Uses the file header first; when PHP cannot parse it (some AVIF variants),
+	 * the WordPress image editor decodes the file instead.
+	 *
+	 * @param string $path Absolute path.
+	 * @return array{bytes:int,width:int,height:int,mime:string}
+	 */
+	public static function describe( $path ) {
+		clearstatcache( true, $path );
+		if ( ! is_file( $path ) ) {
+			return array( 'bytes' => 0, 'width' => 0, 'height' => 0, 'mime' => '' );
+		}
+		$bytes = (int) filesize( $path );
+		$key   = $path . '|' . (int) filemtime( $path ) . '|' . $bytes;
+		if ( isset( self::$described[ $key ] ) ) {
+			return self::$described[ $key ];
+		}
+		$info   = function_exists( 'wp_getimagesize' ) ? @wp_getimagesize( $path ) : @getimagesize( $path ); // phpcs:ignore -- Local uploads file, read only.
+		$mime   = function_exists( 'wp_get_image_mime' ) ? (string) wp_get_image_mime( $path ) : '';
+		$width  = $info ? (int) $info[0] : 0;
+		$height = $info ? (int) $info[1] : 0;
+		if ( ! $mime && $info && ! empty( $info['mime'] ) ) {
+			$mime = $info['mime'];
+		}
+		if ( ( ! $width || ! $height ) && $mime && function_exists( 'wp_get_image_editor' ) ) {
+			$editor = wp_get_image_editor( $path );
+			if ( ! is_wp_error( $editor ) ) {
+				$size   = $editor->get_size();
+				$width  = (int) $size['width'];
+				$height = (int) $size['height'];
+			}
+		}
+		if ( count( self::$described ) > 5000 ) {
+			self::$described = array();
+		}
+		return self::$described[ $key ] = array( 'bytes' => $bytes, 'width' => $width, 'height' => $height, 'mime' => $mime );
+	}
+
+	/**
+	 * Format label for statistics.
+	 *
+	 * @param string $path File name or path.
+	 */
+	public static function format_of( $path ) {
+		$ext = strtolower( pathinfo( (string) $path, PATHINFO_EXTENSION ) );
+		$map = array( 'jpg' => 'JPEG', 'jpeg' => 'JPEG', 'jpe' => 'JPEG', 'png' => 'PNG', 'avif' => 'AVIF', 'webp' => 'WebP', 'gif' => 'GIF', 'bmp' => 'BMP', 'tif' => 'TIFF', 'tiff' => 'TIFF' );
+		return isset( $map[ $ext ] ) ? $map[ $ext ] : strtoupper( $ext );
+	}
+
 	/** All image attachment IDs, without running usage or similarity analysis. */
 	public static function all_ids() {
 		$ids = array();
@@ -30,6 +84,18 @@ final class Media_Files {
 		$root = wp_normalize_path( $uploads['basedir'] );
 		$library = array();
 		$owned = array();
+		$formats = array();
+		$library_files = 0;
+		$library_bytes = 0;
+		$tally = static function ( $path, $bytes, $where ) use ( &$formats ) {
+			$f = self::format_of( $path );
+			if ( ! isset( $formats[ $f ] ) ) {
+				$formats[ $f ] = array( 'files' => 0, 'bytes' => 0, 'library' => 0, 'unregistered' => 0 );
+			}
+			++$formats[ $f ]['files'];
+			$formats[ $f ]['bytes'] += (int) $bytes;
+			++$formats[ $f ][ $where ];
+		};
 		foreach ( $ids as $id ) {
 			$inv = Media_Inventory::attachment( $id );
 			$attached = get_attached_file( $id, true );
@@ -69,6 +135,9 @@ final class Media_Files {
 					if ( 'attached' === $role && is_array( $outputs ) && ! empty( $outputs['jpeg'] ) && $rel === $outputs['jpeg'] ) {
 						$role = 'jpeg_fallback';
 					}
+					++$library_files;
+					$library_bytes += (int) $file['bytes'];
+					$tally( $rel, $file['bytes'], 'library' );
 					$entry['files'][] = array(
 						'path' => $rel,
 						'role' => $role,
@@ -113,8 +182,10 @@ final class Media_Files {
 					++$count;
 					$size = (int) $file->getSize();
 					$bytes += $size;
+					$tally( $rel, $size, 'unregistered' );
 					if ( count( $unregistered ) < self::LIST_LIMIT ) {
-						$unregistered[] = array( 'path' => $rel, 'bytes' => $size );
+						$info = self::describe( $path );
+						$unregistered[] = array( 'path' => $rel, 'bytes' => $size, 'width' => $info['width'], 'height' => $info['height'] );
 					}
 				}
 			} catch ( \UnexpectedValueException $e ) {
@@ -128,6 +199,9 @@ final class Media_Files {
 			'unregistered_count' => $count,
 			'unregistered_bytes' => $bytes,
 			'incomplete' => $incomplete,
+			'library_files' => $library_files,
+			'library_bytes' => $library_bytes,
+			'formats' => $formats,
 		);
 	}
 }

@@ -23,11 +23,13 @@ final class Admin {
 		add_action( 'admin_post_wpcu_delete_backup', array( $this, 'handle_delete_backup' ) );
 		add_action( 'admin_post_wpcu_media_settings', array( $this, 'handle_media_settings' ) );
 		add_action( 'admin_post_wpcu_media_scan', array( $this, 'handle_media_scan' ) );
+		add_action( 'admin_post_wpcu_media_repair', array( $this, 'handle_media_repair' ) );
 		add_action( 'admin_post_wpcu_media_rescan', array( $this, 'handle_media_rescan' ) );
 		add_action( 'admin_post_wpcu_media_remove', array( $this, 'handle_media_remove' ) );
 		add_action( 'admin_post_wpcu_media_merge', array( $this, 'handle_media_merge' ) );
 		add_action( 'admin_post_wpcu_media_file_remove', array( $this, 'handle_media_file_remove' ) );
 		add_action( 'wp_ajax_wpcu_media_batch', array( $this, 'ajax_media_batch' ) );
+		add_action( 'wp_ajax_wpcu_media_check', array( $this, 'ajax_media_check' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( WPCU_FILE ), array( $this, 'action_links' ) );
 	}
 
@@ -58,15 +60,25 @@ final class Admin {
 				'mediaPolicyHash' => md5( wp_json_encode( Media_Policy::settings() ) ),
 				'mediaPolicyUnsaved' => __( 'Save the image policy before converting. Your changes are not active yet.', 'wp-cleanup' ),
 				'mediaPolicyChanged' => __( 'The saved image policy changed. Reload this page before converting.', 'wp-cleanup' ),
-				'confirmMerge'   => __( 'Replace known references to image #%1$d with image #%2$d and move the old copy to a restorable backup? Crops or dimensions may display differently. Confirm you have a recent full site backup.', 'wp-cleanup' ),
+				'confirmMerge'   => __( "Replace known WordPress references to image #%1$d with image #%2$d?\n\nThe image on this card and its files will leave the Media Library and go to a restorable backup. The selected image stays.\n\nCrops or dimensions may display differently. Confirm you have a recent full site backup.", 'wp-cleanup' ),
 				'confirmMedia'   => __( "Convert %d image(s) with the current image policy?\n\nEvery other size and the original are moved into a backup set. Take a full backup of files and database first.", 'wp-cleanup' ),
 				'mediaDone'      => __( 'Finished: %1$d converted, %2$d failed, %3$d skipped. Old files are in backup set %4$s. Delete it on the Backups tab once the site looks right, to free the space.', 'wp-cleanup' ),
 				'mediaBadResponse' => __( 'The server returned an invalid response (HTTP %d). The current image may have completed; check the library before retrying.', 'wp-cleanup' ),
+				/* translators: 1: HTTP status, 2: seconds, 3: attachment id */
+				'mediaTimedOut' => __( 'The server did not answer in time (HTTP %1$d after %2$d s). Checking whether image #%3$d finished on the server…', 'wp-cleanup' ),
+				/* translators: 1: attachment id, 2: seconds */
+				'mediaWaiting' => __( 'Image #%1$d is still being converted on the server (%2$d s). Waiting…', 'wp-cleanup' ),
+				'mediaFinishedLate' => __( 'Converted. The server finished after the connection timed out, so file details are not shown here; see the backup set on the Backups tab.', 'wp-cleanup' ),
+				'mediaNotFinished' => __( 'Not converted: the server stopped before finishing. The image data still matches its files, so it can be converted again. Partly written new files, if any, show up under files without an attachment.', 'wp-cleanup' ),
+				/* translators: 1: number of images, 2: WP-CLI command */
+				'mediaDeferred' => __( '%1$d image(s) were not converted because they may take longer than this server allows for one request. Convert them with WP-CLI (%2$s) or tick "Also try images that may time out".', 'wp-cleanup' ),
+				'mediaGiveUp' => __( 'The server is still busy with this image after a long wait. Stopped; check the library and the Backups tab before retrying.', 'wp-cleanup' ),
 				'mediaLocation' => __( 'Location', 'wp-cleanup' ),
 				'mediaOriginal' => __( 'Original', 'wp-cleanup' ),
 				'mediaNew' => __( 'New', 'wp-cleanup' ),
 				'mediaReferences' => __( '%d stored path entries (including revisions)', 'wp-cleanup' ),
 				'mediaOriginals' => __( '%d original files moved to backup', 'wp-cleanup' ),
+				'mediaCreated' => __( '%d new files', 'wp-cleanup' ),
 				'mediaStopped'   => __( 'Stopped.', 'wp-cleanup' ),
 				'mediaConfirmBox' => __( 'Please tick the backup confirmation first.', 'wp-cleanup' ),
 				'confirmRemove' => __( 'Move %d unused image(s) and their attachment records into a restorable backup set? Check that none are used from CSS, theme files, external sites or plugin tables.', 'wp-cleanup' ),
@@ -591,6 +603,49 @@ final class Admin {
 		$this->back( array( 'tab' => 'images' ) );
 	}
 
+	/** Repair saved image data that no longer matches the files (fresh check per image). */
+	public function handle_media_repair() {
+		$this->guard( 'wpcu_media_repair' );
+		$report = Media_Report::last();
+		$ids    = isset( $_POST['ids'] ) ? array_filter( array_map( 'absint', (array) wp_unslash( $_POST['ids'] ) ) ) : array(); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- guard() verified the nonce above.
+		if ( ! $ids && $report && ! empty( $report['issues'] ) ) {
+			$ids = array_map( 'intval', array_keys( $report['issues'] ) );
+		}
+		if ( ! $ids ) {
+			$this->notice( 'info', __( 'No image problems to repair.', 'wp-cleanup' ) );
+			$this->back( array( 'tab' => 'images' ) );
+		}
+		$backup  = Backup::start();
+		$details = array();
+		$fixed   = 0;
+		$failed  = 0;
+		foreach ( $ids as $id ) {
+			$r = Media_Integrity::repair( $id, $backup );
+			if ( 'repaired' === $r['status'] ) {
+				++$fixed;
+				foreach ( $r['fixed'] as $line ) {
+					$details[] = '✓ #' . $id . ' ' . wp_basename( (string) get_attached_file( $id, true ) ) . ': ' . $line;
+				}
+			} elseif ( 'failed' === $r['status'] ) {
+				++$failed;
+				$details[] = '✗ #' . $id . ': ' . $r['message'];
+			}
+		}
+		Media_Report::refresh_issues( $ids );
+		if ( ! $fixed && ! $failed ) {
+			$backup->delete(); // Nothing needed repair after the fresh check; keep no empty set.
+			$this->notice( 'info', __( 'A fresh check found nothing left to repair.', 'wp-cleanup' ) );
+			$this->back( array( 'tab' => 'images' ) );
+		}
+		$this->notice(
+			$failed ? 'warning' : 'success',
+			/* translators: 1: repaired images, 2: failed, 3: backup id */
+			sprintf( __( 'Repaired %1$d image(s), %2$d failed. Only WordPress data was changed, no image files. Undo any repair from backup set %3$s on the Backups tab.', 'wp-cleanup' ), $fixed, $failed, $backup->id ),
+			$details
+		);
+		$this->back( array( 'tab' => 'images' ) );
+	}
+
 	public function handle_media_scan() {
 		$this->guard();
 		check_admin_referer( 'wpcu_media_scan' );
@@ -710,6 +765,49 @@ final class Admin {
 		$this->back( array( 'tab' => 'images' ) );
 	}
 
+	/**
+	 * Check one image before converting it, or after its request ended
+	 * without an answer (HTTP 502/504 from a proxy while PHP kept working).
+	 */
+	public function ajax_media_check() {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			wp_send_json_error( array( 'message' => __( 'You are not allowed to do this.', 'wp-cleanup' ) ), 403 );
+		}
+		check_ajax_referer( 'wpcu_media_batch' );
+		$id          = isset( $_POST['id'] ) ? absint( wp_unslash( $_POST['id'] ) ) : 0;
+		$bid         = isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '';
+		$policy_hash = isset( $_POST['policy'] ) ? sanitize_text_field( wp_unslash( $_POST['policy'] ) ) : '';
+		$slow        = ! empty( $_POST['slow'] );
+		$waited      = isset( $_POST['waited'] ) ? absint( wp_unslash( $_POST['waited'] ) ) : 0;
+		if ( ! $id ) {
+			wp_send_json_error( array( 'message' => __( 'Select at least one item.', 'wp-cleanup' ) ), 400 );
+		}
+		if ( ! hash_equals( md5( wp_json_encode( Media_Policy::settings() ) ), $policy_hash ) ) {
+			wp_send_json_error( array( 'message' => __( 'The saved image policy changed. Reload this page before converting.', 'wp-cleanup' ) ), 409 );
+		}
+		if ( $waited ) {
+			Media_Guard::gateway_failed( $waited );
+		}
+		try {
+			$check = Media_Guard::preflight( $id, $slow, $waited > 0 );
+			if ( in_array( $check['state'], array( 'done', 'interrupted' ), true ) ) {
+				Media_Report::forget( array( $id ) );
+				Media_Report::refresh_issues( array( $id ) );
+			}
+			// Open the backup set before the first conversion, so its id survives a request that times out.
+			if ( 'ready' === $check['state'] ) {
+				$backup = '' !== $bid ? Backup::open( $bid ) : Backup::start();
+				if ( ! $backup ) {
+					throw new \RuntimeException( __( 'Backup set not found.', 'wp-cleanup' ) );
+				}
+				$check['backup'] = $backup->id;
+			}
+			wp_send_json_success( $check );
+		} catch ( \Exception $e ) {
+			wp_send_json_error( array( 'message' => $e->getMessage() ), 500 );
+		}
+	}
+
 	public function ajax_media_batch() {
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 300 ); // phpcs:ignore -- One image may take longer than the normal web request.
@@ -744,6 +842,7 @@ final class Admin {
 					'id'
 				)
 			);
+			Media_Report::refresh_issues( $ids );
 			wp_send_json_success(
 				array(
 					'backup'  => $backup->id,
@@ -760,6 +859,10 @@ final class Admin {
 		$avif   = Media_Policy::avif_supported();
 		$report = Media_Report::last();
 		$action = admin_url( 'admin-post.php' );
+
+		if ( $report ) {
+			$this->render_media_stats( $report );
+		}
 
 		echo '<div class="wpcu-media-intro"><p>' . esc_html(
 			sprintf(
@@ -791,7 +894,20 @@ final class Admin {
 		echo '<p><label>' . esc_html__( 'JPEG fallback: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="jpeg_max" min="320" max="8192" value="' . esc_attr( $s['jpeg_max'] ) . '"> px</label> <label>' . esc_html__( 'quality', 'wp-cleanup' ) . ' <input type="number" name="jpeg_quality" min="40" max="95" value="' . esc_attr( $s['jpeg_quality'] ) . '"></label></p>';
 		echo '<p><label>' . esc_html__( 'Full image: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="full_max" min="320" max="8192" value="' . esc_attr( $s['full_max'] ) . '"> px</label></p>';
 		echo '<p><label>' . esc_html__( 'Small image size name', 'wp-cleanup' ) . ' <input type="text" name="small_name" value="' . esc_attr( $s['small_name'] ) . '"></label> <label>' . esc_html__( 'longest side at most', 'wp-cleanup' ) . ' <input type="number" name="small_max" min="64" value="' . esc_attr( $s['small_max'] ) . '"> px</label></p>';
-		echo '<p><label><input type="checkbox" name="set_flag" value="1"' . checked( $s['set_flag'], true, false ) . '> ' . esc_html__( 'Mark converted images for the ALPS theme (_alps_two_size_upload), for compatibility with its image size handling', 'wp-cleanup' ) . '</label></p>';
+		echo '<p><label><input type="checkbox" name="set_flag" value="1"' . checked( $s['set_flag'], true, false ) . '> ' . esc_html__( 'Mark converted images for the ALPS theme (_alps_two_size_upload)', 'wp-cleanup' ) . '</label></p>';
+		$alps = Media_Policy::alps_theme();
+		echo '<p class="description">' . esc_html__( 'The marker tells ALPS that an image follows its size policy: one full image of at most 1920 px plus an optional "alps-small" of at most 768 px. ALPS marks small uploads that only have one file too. Theme templates then map old size names to these files, and regenerating thumbnails does not bring back the old sizes. It is only set while the policy above matches those ALPS sizes; switching it off removes it from converted images.', 'wp-cleanup' ) . '</p>';
+		echo '<p class="description"><strong>' . esc_html(
+			$alps['active']
+				/* translators: %s: theme name and version */
+				? sprintf( __( 'Active theme %s uses the ALPS image policy, so the marker has an effect.', 'wp-cleanup' ), $alps['label'] )
+				/* translators: %s: theme name and version */
+				: sprintf( __( 'Active theme %s does not use the ALPS image policy, so the marker has no effect here.', 'wp-cleanup' ), $alps['label'] )
+		) . '</strong>';
+		if ( $s['set_flag'] && ! Media_Policy::alps_compatible( $s ) ) {
+			echo ' ' . esc_html__( 'The sizes above differ from ALPS (alps-small, 1920/768 px), so no marker is set.', 'wp-cleanup' );
+		}
+		echo '</p>';
 		submit_button( __( 'Save policy', 'wp-cleanup' ), 'secondary', 'submit', false );
 		echo '</form></details>';
 
@@ -809,6 +925,7 @@ final class Admin {
 		if ( ! empty( $report['inventory_stale'] ) ) {
 			echo '<div class="notice notice-info inline"><p>' . esc_html__( 'The conversion totals are from the last full library check. Run it again to update those totals.', 'wp-cleanup' ) . '</p></div>';
 		}
+		$this->render_media_issues( $report );
 
 		echo '<div class="wpcu-cards">';
 		$this->card( __( 'Images to convert', 'wp-cleanup' ), number_format_i18n( count( $report['items'] ) ) );
@@ -877,13 +994,25 @@ final class Admin {
 			echo '<td class="wpcu-result"></td></tr>';
 		}
 		echo '</tbody></table></div>';
-		echo '<div class="wpcu-actions">';
-		echo '<label><input type="checkbox" class="wpcu-media-confirm"> <strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></label>';
-		echo '<p><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
+		echo '<div class="wpcu-actions wpcu-media-actions">';
+		echo '<label class="wpcu-media-option"><input type="checkbox" class="wpcu-media-confirm"><span><strong>' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</strong></span></label>';
+		$gateway = (int) get_option( Media_Guard::GATEWAY, 0 );
+		echo '<div><label class="wpcu-media-option"><input type="checkbox" class="wpcu-media-slow"><span>' . esc_html__( 'Also try images that may time out', 'wp-cleanup' ) . '</span></label><details class="wpcu-media-details"><summary>' . esc_html__( 'How timeouts are handled', 'wp-cleanup' ) . '</summary><p class="description wpcu-media-help">' . esc_html(
+			sprintf(
+				/* translators: 1: seconds per image, 2: how it was determined */
+				__( 'Each image is checked before conversion. Completed or still-running images are skipped. Images estimated to need more than about %1$d s (%2$s) are deferred unless you select the option above. After a timeout, WP Cleanup checks whether the server finished the image.', 'wp-cleanup' ),
+				Media_Guard::budget(),
+				$gateway
+					/* translators: %d: seconds */
+					? sprintf( __( 'this server timed out after %d s before', 'wp-cleanup' ), $gateway )
+					: __( 'a typical proxy limit; no timeout seen yet', 'wp-cleanup' )
+			)
+		) . '</p></details></div>';
+		echo '<div class="wpcu-media-controls"><button type="button" class="button button-primary wpcu-delete wpcu-media-run" data-scope="selected"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html__( 'Convert selected', 'wp-cleanup' ) . '</button> ';
 		/* translators: %d: images */
-		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button> ';
-		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after this batch', 'wp-cleanup' ) . '</button></p>';
-		echo '<p><progress class="wpcu-media-progress" max="100" value="0" hidden></progress> <span class="wpcu-media-status" aria-live="polite"></span></p>';
+		echo '<button type="button" class="button wpcu-media-run" data-scope="all"' . disabled( $s['jpeg_fallback'] ? $jpeg : $avif, false, false ) . '>' . esc_html( sprintf( __( 'Convert all %d', 'wp-cleanup' ), count( $report['items'] ) ) ) . '</button>';
+		echo '<button type="button" class="button wpcu-media-stop" hidden>' . esc_html__( 'Stop after current image', 'wp-cleanup' ) . '</button></div>';
+		echo '<div class="wpcu-media-feedback"><progress class="wpcu-media-progress" max="100" value="0" hidden></progress><span class="wpcu-media-status" aria-live="polite"></span></div>';
 		echo '</div></form>';
 		$this->render_image_usage( $report );
 		$this->render_file_catalog( $report );
@@ -1069,24 +1198,25 @@ final class Admin {
 				foreach ( $group['ids'] as $id ) {
 					$i        = isset( $info[ $id ] ) ? $info[ $id ] : array( 'file' => '#' . $id, 'w' => 0, 'h' => 0, 'bytes' => 0 );
 					$eligible = isset( $known[ $id ] ) && empty( $report['use_counts'][ $id ] ) && ! Media_Policy::skip_reason( $id );
-					echo '<div class="wpcu-dup-item">' . self::thumb( $id, 96 ) . '<div class="wpcu-dup-meta">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+					echo '<div class="wpcu-dup-item"><div class="wpcu-dup-summary">' . self::thumb( $id, 96 ) . '<div class="wpcu-dup-meta">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
 					echo '<a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( $i['file'] ) . '</code></a>';
 					echo '<div class="wpcu-muted">' . esc_html( $i['w'] . '×' . $i['h'] . ' · ' . size_format( $i['bytes'], 1 ) ) . '</div>';
 					echo self::uses_html( $id, $report ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- uses_html() escapes every part.
+					echo '</div></div>';
 					if ( ! Media_Policy::skip_reason( $id ) && count( $group['ids'] ) > 1 ) {
-						echo '<div class="wpcu-dup-merge"><label>' . esc_html__( 'Use this image instead:', 'wp-cleanup' ) . ' <select class="wpcu-merge-keeper" aria-label="' . esc_attr( sprintf( __( 'Replacement for image %d', 'wp-cleanup' ), $id ) ) . '">';
+						echo '<div class="wpcu-dup-merge"><label>' . esc_html__( 'Keep this image instead:', 'wp-cleanup' ) . ' <select class="wpcu-merge-keeper" aria-label="' . esc_attr( sprintf( __( 'Replacement for image %d', 'wp-cleanup' ), $id ) ) . '">';
 						foreach ( $group['ids'] as $other_id ) {
 							if ( $other_id !== $id && ! Media_Policy::skip_reason( $other_id ) ) {
 								$other_info = isset( $info[ $other_id ] ) ? $info[ $other_id ] : array( 'file' => '#' . $other_id );
-								echo '<option value="' . (int) $other_id . '">' . esc_html( $other_info['file'] ) . '</option>';
+								echo '<option value="' . (int) $other_id . '">' . esc_html( '#' . $other_id . ' · ' . $other_info['file'] ) . '</option>';
 							}
 						}
-						echo '</select></label> <button type="button" class="button button-small wpcu-merge-image" data-drop="' . (int) $id . '">' . esc_html__( 'Merge and back up this copy', 'wp-cleanup' ) . '</button></div>';
+						echo '</select></label><button type="button" class="button wpcu-merge-image" data-drop="' . (int) $id . '">' . esc_html__( 'Replace this image', 'wp-cleanup' ) . '</button><p class="description">' . esc_html__( 'This card\'s image leaves the Media Library and moves to Backups. The selected image stays.', 'wp-cleanup' ) . '</p></div>';
 					}
 					if ( $eligible ) {
 						echo '<div class="wpcu-dup-remove"><label><input type="checkbox" name="ids[]" form="wpcu-lookalikes-form" value="' . (int) $id . '" data-lookalike="' . ( isset( $recommended[ $id ] ) ? '1' : '0' ) . '"> ' . esc_html__( 'Select for backup', 'wp-cleanup' ) . '</label> <button type="button" class="button button-small wpcu-single-remove" data-id="' . (int) $id . '">' . esc_html__( 'Move this image to backup', 'wp-cleanup' ) . '</button></div>';
 					}
-					echo '</div></div>';
+					echo '</div>';
 				}
 				echo '</div></div>';
 			}
@@ -1129,6 +1259,124 @@ final class Admin {
 		echo '</tbody></table></div>';
 		self::removal_footer();
 		echo '</form></details>';
+	}
+
+	/**
+	 * "1920×1280 · AVIF · 58.3 KB" for a file info array.
+	 *
+	 * @param array|null $info bytes, width, height, mime.
+	 */
+	private static function file_info_text( $info ) {
+		if ( ! is_array( $info ) ) {
+			return '';
+		}
+		$parts = array();
+		if ( ! empty( $info['width'] ) && ! empty( $info['height'] ) ) {
+			$parts[] = (int) $info['width'] . '×' . (int) $info['height'];
+		}
+		if ( ! empty( $info['mime'] ) ) {
+			$parts[] = strtoupper( str_replace( 'image/', '', $info['mime'] ) );
+		}
+		if ( isset( $info['bytes'] ) ) {
+			$parts[] = size_format( (int) $info['bytes'], 1 ) ? size_format( (int) $info['bytes'], 1 ) : '0 B';
+		}
+		return implode( ' · ', $parts );
+	}
+
+	/** Totals of every image file on the server, shown at the top even when nothing is left to convert. */
+	private function render_media_stats( array $report ) {
+		$cat = isset( $report['file_catalog'] ) ? $report['file_catalog'] : null;
+		echo '<div class="wpcu-section-head"><h2>' . esc_html__( 'Images on this server', 'wp-cleanup' ) . '</h2></div>';
+		if ( ! $cat ) {
+			echo '<p class="description">' . esc_html__( 'Check the media library again to count every image file on the server.', 'wp-cleanup' ) . '</p>';
+			return;
+		}
+		$lib_files = isset( $cat['library_files'] ) ? (int) $cat['library_files'] : array_sum( array_map( 'count', wp_list_pluck( $cat['library'], 'files' ) ) );
+		$lib_bytes = isset( $cat['library_bytes'] ) ? (int) $cat['library_bytes'] : 0;
+		if ( ! isset( $cat['library_bytes'] ) ) {
+			foreach ( $cat['library'] as $image ) {
+				$lib_bytes += array_sum( wp_list_pluck( $image['files'], 'bytes' ) );
+			}
+		}
+		$all_files = $lib_files + (int) $cat['unregistered_count'];
+		$all_bytes = $lib_bytes + (int) $cat['unregistered_bytes'];
+		$held      = 0;
+		foreach ( Backup::all() as $b ) {
+			$held += (int) $b['bytes'];
+		}
+		$size = static function ( $bytes ) {
+			return size_format( (int) $bytes, 1 ) ? size_format( (int) $bytes, 1 ) : '0 B';
+		};
+
+		echo '<div class="wpcu-cards wpcu-stats">';
+		/* translators: %s: date */
+		$this->card( __( 'Image files on the server', 'wp-cleanup' ), number_format_i18n( $all_files ) . ' · ' . $size( $all_bytes ), sprintf( __( 'Every image file under uploads, as of %s.', 'wp-cleanup' ), wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $report['created'] ) ) );
+		/* translators: 1: images, 2: files */
+		$this->card( __( 'Media Library images', 'wp-cleanup' ), number_format_i18n( count( $cat['library'] ) ) . ' · ' . $size( $lib_bytes ), sprintf( __( '%1$s images with %2$s files on disk (all sizes and fallbacks).', 'wp-cleanup' ), number_format_i18n( count( $cat['library'] ) ), number_format_i18n( $lib_files ) ) );
+		$this->card( __( 'Files without a Media Library attachment', 'wp-cleanup' ), number_format_i18n( (int) $cat['unregistered_count'] ) . ' · ' . $size( $cat['unregistered_bytes'] ), __( 'Listed at the bottom of this page.', 'wp-cleanup' ) );
+		$this->card( __( 'Held in backup sets', 'wp-cleanup' ), $size( $held ), __( 'Freed when you delete those sets on the Backups tab.', 'wp-cleanup' ) );
+		echo '</div>';
+
+		if ( ! empty( $cat['formats'] ) ) {
+			$formats = $cat['formats'];
+			uasort(
+				$formats,
+				static function ( $a, $b ) {
+					return $b['bytes'] - $a['bytes'];
+				}
+			);
+			echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-format-table"><thead><tr><th>' . esc_html__( 'Format', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Files', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'In Media Library', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Without attachment', 'wp-cleanup' ) . '</th><th class="num">' . esc_html__( 'Space', 'wp-cleanup' ) . '</th><th>' . esc_html__( 'Share of space', 'wp-cleanup' ) . '</th></tr></thead><tbody>';
+			foreach ( $formats as $name => $f ) {
+				$share = $all_bytes ? round( 100 * $f['bytes'] / $all_bytes, 1 ) : 0;
+				echo '<tr><td>' . esc_html( $name ) . '</td><td class="num">' . esc_html( number_format_i18n( $f['files'] ) ) . '</td><td class="num">' . esc_html( number_format_i18n( $f['library'] ) ) . '</td><td class="num">' . esc_html( number_format_i18n( $f['unregistered'] ) ) . '</td><td class="num">' . esc_html( $size( $f['bytes'] ) ) . '</td><td><span class="wpcu-bar"><span style="width:' . esc_attr( (string) $share ) . '%"></span></span> ' . esc_html( number_format_i18n( $share, 1 ) ) . '%</td></tr>';
+			}
+			echo '</tbody></table></div>';
+		}
+		if ( ! empty( $report['inventory_stale'] ) ) {
+			echo '<p class="description">' . esc_html__( 'These totals are from the last full check; check the library again after converting or removing images.', 'wp-cleanup' ) . '</p>';
+		}
+	}
+
+	/** Saved image data that disagrees with the files, found automatically on every check. */
+	private function render_media_issues( array $report ) {
+		if ( ! isset( $report['issues'] ) ) {
+			return;
+		}
+		$issues = (array) $report['issues'];
+		if ( ! $issues ) {
+			echo '<div class="notice notice-success inline"><p>' . esc_html__( 'Image data check: every image\'s saved paths, dimensions, sizes and markers match its files.', 'wp-cleanup' ) . '</p></div>';
+			return;
+		}
+		$fixable = 0;
+		$manual  = 0;
+		foreach ( $issues as $list ) {
+			foreach ( $list as $issue ) {
+				$issue['fixable'] ? ++$fixable : ++$manual;
+			}
+		}
+		echo '<div class="notice notice-warning inline wpcu-issues"><p><strong>' . esc_html(
+			/* translators: 1: images, 2: fixable problems, 3: manual */
+			sprintf( __( 'Image data check found problems in %1$d image(s): %2$d can be repaired automatically, %3$d need your attention.', 'wp-cleanup' ), count( $issues ), $fixable, $manual )
+		) . '</strong></p>';
+		echo '<details><summary>' . esc_html__( 'Show the problems', 'wp-cleanup' ) . '</summary><ul class="wpcu-issue-list">';
+		foreach ( $issues as $id => $list ) {
+			$id = (int) $id;
+			echo '<li><span class="wpcu-catalog-thumb">' . self::thumb( $id, 32 ) . '</span> <a href="' . esc_url( (string) get_edit_post_link( $id ) ) . '"><code>' . esc_html( (string) get_post_meta( $id, '_wp_attached_file', true ) ) . '</code></a><ul>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- thumb() escapes its attributes.
+			foreach ( $list as $issue ) {
+				echo '<li class="' . ( $issue['fixable'] ? 'wpcu-issue-fix' : 'wpcu-issue-manual' ) . '">' . ( $issue['fixable'] ? '' : '<strong>' . esc_html__( 'Needs attention:', 'wp-cleanup' ) . '</strong> ' ) . esc_html( $issue['message'] ) . '</li>';
+			}
+			echo '</ul></li>';
+		}
+		echo '</ul></details>';
+		if ( $fixable ) {
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="wpcu-inline-form wpcu-repair-form">';
+			wp_nonce_field( 'wpcu_media_repair' );
+			echo '<input type="hidden" name="action" value="wpcu_media_repair">';
+			/* translators: %d: problems */
+			submit_button( sprintf( _n( 'Repair %d problem', 'Repair %d problems', $fixable, 'wp-cleanup' ), $fixable ), 'primary', 'submit', false );
+			echo ' <span class="description">' . esc_html__( 'Changes only WordPress data (paths, type, dimensions, size lists, ALPS marker), never image files. Each image is re-checked first and every repair can be undone on the Backups tab.', 'wp-cleanup' ) . '</span></form>';
+		}
+		echo '</div>';
 	}
 
 	/** Current image attachments, their variants, and files without an attachment. */
@@ -1186,10 +1434,14 @@ final class Admin {
 			echo '<input type="hidden" name="action" value="wpcu_media_file_remove">';
 			echo '<div class="wpcu-scroll"><table class="widefat striped wpcu-items wpcu-sortable"><thead><tr><th class="check-column"></th>';
 			echo self::sort_heading( __( 'File on server', 'wp-cleanup' ), 'text' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Helper escapes output.
+			echo self::sort_heading( __( 'Dimensions', 'wp-cleanup' ), 'number' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Helper escapes output.
 			echo self::sort_heading( __( 'Disk', 'wp-cleanup' ), 'number' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Helper escapes output.
 			echo '</tr></thead><tbody>';
 			foreach ( $catalog['unregistered'] as $file ) {
-				echo '<tr><th scope="row" class="check-column"><input type="checkbox" name="paths[]" value="' . esc_attr( $file['path'] ) . '" aria-label="' . esc_attr( sprintf( __( 'Select %s', 'wp-cleanup' ), $file['path'] ) ) . '"></th><td><code>' . esc_html( $file['path'] ) . '</code></td><td data-sort-value="' . (int) $file['bytes'] . '">' . esc_html( size_format( $file['bytes'], 1 ) ) . '</td></tr>';
+				$w = isset( $file['width'] ) ? (int) $file['width'] : 0;
+				$h = isset( $file['height'] ) ? (int) $file['height'] : 0;
+				/* translators: %s: file path */
+				echo '<tr><th scope="row" class="check-column"><input type="checkbox" name="paths[]" value="' . esc_attr( $file['path'] ) . '" aria-label="' . esc_attr( sprintf( __( 'Select %s', 'wp-cleanup' ), $file['path'] ) ) . '"></th><td><code>' . esc_html( $file['path'] ) . '</code></td><td data-sort-value="' . (int) ( $w * $h ) . '">' . ( $w && $h ? esc_html( $w . '×' . $h ) : '<span class="wpcu-muted">–</span>' ) . '</td><td data-sort-value="' . (int) $file['bytes'] . '">' . esc_html( size_format( $file['bytes'], 1 ) ) . '</td></tr>';
 			}
 			echo '</tbody></table></div>';
 			echo '<div class="wpcu-actions"><p><label><input type="checkbox" name="confirm" value="1" required> ' . esc_html__( 'I have a recent full backup of files and database', 'wp-cleanup' ) . '</label></p><p><button type="submit" class="button button-primary">' . esc_html__( 'Move selected server files to backup', 'wp-cleanup' ) . '</button> <span class="wpcu-selection-count" aria-live="polite"></span></p><p class="description">' . esc_html__( 'Up to 20 files per action. Files mentioned in WordPress data are refused; theme code, CSS and external links must be checked separately.', 'wp-cleanup' ) . '</p></div></form>';
@@ -1223,6 +1475,9 @@ final class Admin {
 					echo '<details><summary>' . esc_html( sprintf( __( '%d original files moved to backup', 'wp-cleanup' ), count( $extra['moved'] ) ) ) . '</summary><ul>';
 					foreach ( $extra['moved'] as $file_index => $path ) {
 						echo '<li><code>' . esc_html( $path ) . '</code>';
+						if ( isset( $extra['moved_info'][ $path ] ) ) {
+							echo ' <span class="wpcu-muted">' . esc_html( self::file_info_text( $extra['moved_info'][ $path ] ) ) . '</span>';
+						}
 						if ( empty( $i['restored'] ) ) {
 							$url = add_query_arg( array( 'action' => 'wpcu_backup_download', 'backup' => $b['id'], 'item' => (int) $n, 'file' => (int) $file_index ), admin_url( 'admin-post.php' ) );
 							echo ' <a href="' . esc_url( wp_nonce_url( $url, 'wpcu_backup_download_' . $b['id'] ) ) . '">' . esc_html__( 'Download original', 'wp-cleanup' ) . '</a>';
@@ -1236,17 +1491,32 @@ final class Admin {
 					foreach ( $extra['reference_changes'] as $change ) {
 						echo '<li class="wpcu-reference-change">';
 						echo '<div><strong>' . esc_html__( 'Location', 'wp-cleanup' ) . ':</strong> ' . esc_html( $change['where'] ) . '</div>';
-						echo '<div><strong>' . esc_html__( 'Original', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['from'] ) . '</code></div>';
-						echo '<div><strong>' . esc_html__( 'New', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['to'] ) . '</code></div>';
+						echo '<div><strong>' . esc_html__( 'Original', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['from'] ) . '</code> <span class="wpcu-muted">' . esc_html( self::file_info_text( isset( $change['from_info'] ) ? $change['from_info'] : null ) ) . '</span></div>';
+						echo '<div><strong>' . esc_html__( 'New', 'wp-cleanup' ) . ':</strong> <code>' . esc_html( $change['to'] ) . '</code> <span class="wpcu-muted">' . esc_html( self::file_info_text( isset( $change['to_info'] ) ? $change['to_info'] : null ) ) . '</span></div>';
 						echo '</li>';
 					}
 					echo '</ul></details>';
+				}
+				if ( ! empty( $extra['created_info'] ) ) {
+					/* translators: %d: files */
+					echo '<details><summary>' . esc_html( sprintf( _n( '%d new file', '%d new files', count( $extra['created_info'] ), 'wp-cleanup' ), count( $extra['created_info'] ) ) ) . '</summary><ul>';
+					foreach ( $extra['created_info'] as $path => $info ) {
+						echo '<li>' . ( ! empty( $info['role'] ) ? esc_html( $info['role'] ) . ': ' : '' ) . '<code>' . esc_html( $path ) . '</code> <span class="wpcu-muted">' . esc_html( self::file_info_text( $info ) ) . '</span></li>';
+					}
+					echo '</ul></details>';
+				}
+				if ( ! empty( $extra['fixed'] ) ) {
+					echo '<ul class="wpcu-issue-list">';
+					foreach ( (array) $extra['fixed'] as $line ) {
+						echo '<li>✓ ' . esc_html( $line ) . '</li>';
+					}
+					echo '</ul>';
 				}
 				if ( 'deleted' === $i['result'] && empty( $i['restored'] ) ) {
 					echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="wpcu-inline-form">';
 					wp_nonce_field( 'wpcu_restore_item' );
 					echo '<input type="hidden" name="action" value="wpcu_restore"><input type="hidden" name="backup" value="' . esc_attr( $b['id'] ) . '"><input type="hidden" name="item" value="' . (int) $n . '">';
-					submit_button( 'media' === $i['type'] || 'media_delete' === $i['type'] || 'media_merge_rewrite' === $i['type'] ? __( 'Restore this image only', 'wp-cleanup' ) : __( 'Restore this item only', 'wp-cleanup' ), 'secondary', 'submit', false );
+					submit_button( 'media' === $i['type'] || 'media_repair' === $i['type'] || 'media_delete' === $i['type'] || 'media_merge_rewrite' === $i['type'] ? __( 'Restore this image only', 'wp-cleanup' ) : __( 'Restore this item only', 'wp-cleanup' ), 'secondary', 'submit', false );
 					echo '</form>';
 				}
 				echo '</li>';

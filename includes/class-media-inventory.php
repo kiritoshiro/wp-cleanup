@@ -135,7 +135,7 @@ final class Media_Inventory {
 		$s = Media_Policy::settings();
 		$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
 		if ( $s['jpeg_fallback'] && is_array( $outputs ) && ! empty( $outputs['jpeg'] ) ) {
-			if ( ! empty( $meta['original_image'] ) || ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) || $outputs['policy'] != $s ) { // phpcs:ignore -- compare policy arrays.
+			if ( ! empty( $meta['original_image'] ) || ! isset( $outputs['policy'] ) || ! is_array( $outputs['policy'] ) || Media_Policy::encoding_policy( $outputs['policy'] ) != Media_Policy::encoding_policy( $s ) ) { // phpcs:ignore -- compare policy arrays.
 				return false;
 			}
 			$has_avif = ! empty( $outputs['avif_full'] );
@@ -168,10 +168,10 @@ final class Media_Inventory {
 					return false;
 				}
 			}
-			return ! $s['set_flag'] || get_post_meta( $id, Media_Policy::ALPS_FLAG, true );
+			return true; // The ALPS marker is kept in sync by Media_Integrity without re-encoding.
 		}
 		if ( ! $s['jpeg_fallback'] && 'image/avif' === get_post_mime_type( $id ) && empty( $meta['original_image'] ) && max( (int) ( isset( $meta['width'] ) ? $meta['width'] : 0 ), (int) ( isset( $meta['height'] ) ? $meta['height'] : 0 ) ) <= $s['full_max'] ) {
-			if ( is_array( $outputs ) && ( ! empty( $outputs['jpeg'] ) || ( isset( $outputs['policy'] ) && $outputs['policy'] != $s ) ) ) { // phpcs:ignore -- compare policy arrays.
+			if ( is_array( $outputs ) && ( ! empty( $outputs['jpeg'] ) || ( isset( $outputs['policy'] ) && is_array( $outputs['policy'] ) && Media_Policy::encoding_policy( $outputs['policy'] ) != Media_Policy::encoding_policy( $s ) ) ) ) { // phpcs:ignore -- compare policy arrays.
 				return false;
 			}
 			$sizes = isset( $meta['sizes'] ) ? (array) $meta['sizes'] : array();
@@ -183,7 +183,7 @@ final class Media_Inventory {
 					return false;
 				}
 			}
-			return ! $s['set_flag'] || get_post_meta( $id, Media_Policy::ALPS_FLAG, true );
+			return true; // The ALPS marker is kept in sync by Media_Integrity without re-encoding.
 		}
 		return false;
 	}

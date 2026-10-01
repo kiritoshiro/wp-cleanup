@@ -259,11 +259,12 @@ final class CLI {
 	 * ## OPTIONS
 	 *
 	 * <action>
-	 * : status | convert
+	 * : status | convert | repair
 	 * ---
 	 * options:
 	 *   - status
 	 *   - convert
+	 *   - repair
 	 * ---
 	 *
 	 * [--ids=<ids>]
@@ -286,18 +287,59 @@ final class CLI {
 	 *     wp cleanup images status
 	 *     wp cleanup images convert --limit=20 --dry-run
 	 *     wp cleanup images convert --ids=123,456 --yes
+	 *     wp cleanup images repair --dry-run
 	 *
 	 * @param array $args  Positional.
 	 * @param array $assoc Associative.
 	 */
 	public function images( $args, $assoc ) {
 		$s = Media_Policy::settings();
+		if ( 'repair' === $args[0] ) {
+			$ids    = ! empty( $assoc['ids'] ) ? array_filter( array_map( 'intval', explode( ',', $assoc['ids'] ) ) ) : Media_Files::all_ids();
+			$issues = Media_Integrity::scan( $ids );
+			if ( ! $issues ) {
+				\WP_CLI::success( "Every image's saved data matches its files." );
+				return;
+			}
+			$fixable = 0;
+			foreach ( $issues as $id => $list ) {
+				foreach ( $list as $issue ) {
+					\WP_CLI::log( sprintf( '#%d %s %s', $id, $issue['fixable'] ? 'fix   ' : 'MANUAL', $issue['message'] ) );
+					$fixable += $issue['fixable'] ? 1 : 0;
+				}
+			}
+			if ( \WP_CLI\Utils\get_flag_value( $assoc, 'dry-run', false ) || ! $fixable ) {
+				\WP_CLI::success( sprintf( '%d problem(s) can be repaired automatically.', $fixable ) );
+				return;
+			}
+			\WP_CLI::confirm( sprintf( 'Repair %d problem(s)? Only WordPress data changes; a backup set is written.', $fixable ), $assoc );
+			$backup = Backup::start();
+			$done   = 0;
+			foreach ( array_keys( $issues ) as $id ) {
+				$r = Media_Integrity::repair( $id, $backup );
+				if ( 'repaired' === $r['status'] ) {
+					++$done;
+				} elseif ( 'failed' === $r['status'] ) {
+					\WP_CLI::warning( '#' . $id . ': ' . $r['message'] );
+				}
+			}
+			Media_Report::refresh_issues( array_keys( $issues ) );
+			\WP_CLI::success( sprintf( 'Repaired %d image(s). Backup set: %s', $done, $backup->id ) );
+			return;
+		}
 		if ( 'status' === $args[0] ) {
 			$r = Media_Report::build_and_store();
 			\WP_CLI::log( sprintf( 'Policy: %s, AVIF full <= %dpx + "%s" <= %dpx%s. AVIF support: %s.', $s['jpeg_fallback'] ? sprintf( 'one JPEG <= %dpx (quality %d)', $s['jpeg_max'], $s['jpeg_quality'] ) : 'AVIF only', $s['full_max'], $s['small_name'], $s['small_max'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
 			\WP_CLI::log( sprintf( '%d images: %d to convert (%d files, %s, incl. %d stray files %s), %d already compliant, %d skipped.', $r['total'], $r['eligible'], $r['files'], size_format( $r['bytes'], 1 ), $r['strays'], size_format( $r['stray_b'], 1 ), $r['compliant'], $r['skipped'] ) );
 			if ( isset( $r['file_catalog'] ) ) {
-				\WP_CLI::log( sprintf( '%d image file(s) on the server have no Media Library attachment (%s).', $r['file_catalog']['unregistered_count'], size_format( $r['file_catalog']['unregistered_bytes'], 1 ) ) );
+				$c = $r['file_catalog'];
+				\WP_CLI::log( sprintf( 'Image files on the server: %d (%s): %d in the Media Library (%s), %d without an attachment (%s).', $c['library_files'] + $c['unregistered_count'], size_format( $c['library_bytes'] + $c['unregistered_bytes'], 1 ), $c['library_files'], size_format( $c['library_bytes'], 1 ), $c['unregistered_count'], size_format( $c['unregistered_bytes'], 1 ) ) );
+				foreach ( $c['formats'] as $format => $f ) {
+					\WP_CLI::log( sprintf( '  %-5s %6d files  %s', $format, $f['files'], size_format( $f['bytes'], 1 ) ) );
+				}
+			}
+			if ( ! empty( $r['issues'] ) ) {
+				\WP_CLI::warning( sprintf( 'Image data problems in %d image(s); run "wp cleanup images repair --dry-run" to see them.', count( $r['issues'] ) ) );
 			}
 			foreach ( $r['reasons'] as $reason => $count ) {
 				\WP_CLI::log( sprintf( '  skipped %d: %s', $count, $reason ) );
@@ -355,6 +397,15 @@ final class CLI {
 		$backup = $dry ? null : Backup::start();
 		$tally  = array( 'converted' => 0, 'failed' => 0, 'before' => 0, 'after' => 0 );
 		foreach ( $ids as $id ) {
+			if ( ! $dry ) {
+				// WP-CLI has no gateway time limit, but an earlier web request may still hold or have abandoned this image.
+				$check = Media_Guard::preflight( $id, true );
+				if ( in_array( $check['state'], array( 'busy', 'interrupted' ), true ) ) {
+					\WP_CLI::log( sprintf( '#%d %-9s %s', $id, $check['state'], $check['message'] ) );
+					++$tally['failed'];
+					continue;
+				}
+			}
 			$r = Media_Converter::convert( $id, $backup, $dry );
 			\WP_CLI::log( sprintf( '#%d %-9s %s', $id, $r['status'], $r['message'] ) );
 			if ( 'converted' === $r['status'] ) {
@@ -371,6 +422,7 @@ final class CLI {
 		}
 		wp_cache_flush();
 		Media_Report::forget( $ids );
+		Media_Report::refresh_issues( $ids );
 		$msg = sprintf(
 			'Converted %d, failed %d. %s of old files moved into backup set %s; new image files use %s. Delete that set (wp cleanup delete-backup %s) once the site looks right to free the space.',
 			$tally['converted'],
