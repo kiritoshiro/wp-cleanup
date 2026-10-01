@@ -410,6 +410,9 @@ final class Backup {
 			case 'media':
 				return Media_Converter::restore( $this, $n, $item );
 
+			case 'media_repair':
+				return Media_Integrity::restore( $this, $n, $item );
+
 			case 'media_delete':
 				return Media_Remover::restore( $this, $n, $item );
 

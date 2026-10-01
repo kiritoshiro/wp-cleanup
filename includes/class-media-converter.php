@@ -126,8 +126,8 @@ final class Media_Converter {
 			}
 
 			$primary = $full ? $full : $jpeg;
-			$primary_name = wp_basename( $primary['path'] );
-			$small_name = $small ? wp_basename( $small['path'] ) : '';
+			$primary_name = wp_basename( $primary['final'] );
+			$small_name = $small ? wp_basename( $small['final'] ) : '';
 			$map = array();
 			$needles = array();
 			$remove = array();
@@ -143,6 +143,10 @@ final class Media_Converter {
 			$widths = array( Reference_Rewriter::key( $inv['rel_dir'], $primary_name ) => $primary['width'] );
 			if ( $small ) {
 				$widths[ Reference_Rewriter::key( $inv['rel_dir'], $small_name ) ] = $small['width'];
+			}
+			$moved_info = array();
+			foreach ( $remove as $name => $file ) {
+				$moved_info[ ltrim( $inv['rel_dir'] . '/' . $name, '/' ) ] = Media_Files::describe( $inv['dir'] . '/' . $name );
 			}
 			$rewriter = new Reference_Rewriter( $map, $widths );
 			$changes  = $rewriter->plan( array_keys( $needles ), $id );
@@ -187,8 +191,36 @@ final class Media_Converter {
 				$moved[] = $rel;
 			}
 
+			// 7. Outputs written under a temporary name take their clean name now that it is free.
+			foreach ( array( 'jpeg', 'full', 'small' ) as $var ) {
+				$out = ${$var};
+				if ( ! $out || $out['path'] === $out['final'] ) {
+					continue;
+				}
+				if ( file_exists( $out['final'] ) || ! @rename( $out['path'], $out['final'] ) ) { // phpcs:ignore
+					/* translators: %s: file */
+					throw new \RuntimeException( sprintf( __( 'Could not give the new file its final name %s.', 'wp-cleanup' ), wp_basename( $out['final'] ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+				$created = array_values( array_diff( $created, array( $out['path'] ) ) );
+				$created[] = $out['final'];
+				$out['path'] = $out['final'];
+				${$var} = $out;
+			}
+			$created_info = array();
+			foreach ( array( 'jpeg' => __( 'JPEG fallback', 'wp-cleanup' ), 'full' => __( 'Full AVIF', 'wp-cleanup' ), 'small' => __( 'Small AVIF', 'wp-cleanup' ) ) as $var => $label ) {
+				if ( ${$var} ) {
+					$created_info[ self::rel( ${$var}['path'] ) ] = array_merge( Media_Files::describe( ${$var}['path'] ), array( 'role' => $label ) );
+				}
+			}
+			foreach ( $reference_changes as $i => $change ) {
+				$reference_changes[ $i ]['from_info'] = self::info_for_key( $change['from'], $moved_info );
+				$reference_changes[ $i ]['to_info']   = self::info_for_key( $change['to'], $created_info );
+			}
+
 			$backup->set_extra( $n, 'created', array_map( array( __CLASS__, 'rel' ), $created ) );
 			$backup->set_extra( $n, 'moved', $moved );
+			$backup->set_extra( $n, 'moved_info', $moved_info );
+			$backup->set_extra( $n, 'created_info', $created_info );
 			$backup->set_extra( $n, 'reference_changes', $reference_changes );
 			$backup->set_extra( $n, 'meta_hash', self::meta_hash( $id ) );
 			$backup->set_extra(
@@ -212,6 +244,8 @@ final class Media_Converter {
 			$result['bytes_after'] = $after;
 			$result['reference_changes'] = $reference_changes;
 			$result['backed_up'] = $moved;
+			$result['backed_up_info'] = self::info_list( $moved_info );
+			$result['created_info'] = self::info_list( $created_info );
 			$result['message']     = sprintf(
 				/* translators: 1: files, 2: size before, 3: size after, 4: stored fields, 5: revisions */
 				__( '%1$d file(s), %2$s → %3$s; %4$d stored field(s) rewritten (%5$d in revisions). These are database records, not separate image uses.', 'wp-cleanup' ),
@@ -234,6 +268,31 @@ final class Media_Converter {
 			$result['message'] = $e->getMessage();
 			return $result;
 		}
+	}
+
+	/**
+	 * File info for a rewrite key ("uploads/2024/05/a.jpg").
+	 *
+	 * @param string $key   Reference key.
+	 * @param array  $infos Uploads-relative path => info.
+	 * @return array|null
+	 */
+	private static function info_for_key( $key, array $infos ) {
+		$parts = explode( '/', (string) $key, 2 );
+		$rel   = isset( $parts[1] ) ? $parts[1] : '';
+		return isset( $infos[ $rel ] ) ? $infos[ $rel ] : null;
+	}
+
+	/**
+	 * @param array $infos Path => info.
+	 * @return array[] Each: path, bytes, width, height, mime, role.
+	 */
+	public static function info_list( array $infos ) {
+		$out = array();
+		foreach ( $infos as $path => $info ) {
+			$out[] = array_merge( array( 'path' => $path, 'role' => '' ), (array) $info );
+		}
+		return $out;
 	}
 
 	/** Explain each rewritten row and its old and new image paths. */
@@ -298,7 +357,7 @@ final class Media_Converter {
 			}
 		}
 		$editor->set_quality( $s['jpeg_quality'] );
-		$jpeg = self::save( $editor, $inv['dir'], $inv['base'] . '-fallback.jpg', $created, 'image/jpeg' );
+		$jpeg = self::save( $editor, $inv['dir'], $inv['base'] . '-fallback.jpg', $created, 'image/jpeg', $inv['files'] );
 		$mime = wp_get_image_mime( $source );
 		$load = 'image/png' === $mime ? 'imagecreatefrompng' : ( 'image/avif' === $mime ? 'imagecreatefromavif' : '' );
 		$canvas = null;
@@ -361,7 +420,7 @@ final class Media_Converter {
 				throw new \RuntimeException( $err->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
 		}
-		$full = self::save( $editor, $inv['dir'], $inv['base'] . '.avif', $created, 'image/avif' );
+		$full = self::save( $editor, $inv['dir'], $inv['base'] . '.avif', $created, 'image/avif', $inv['files'] );
 		self::verify( $full, 'image/avif' );
 
 		$small = null;
@@ -375,7 +434,7 @@ final class Media_Converter {
 				throw new \RuntimeException( $err->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 			}
 			$dims = $editor->get_size();
-			$small = self::save( $editor, $inv['dir'], $inv['base'] . '-' . $dims['width'] . 'x' . $dims['height'] . '.avif', $created, 'image/avif' );
+			$small = self::save( $editor, $inv['dir'], $inv['base'] . '-' . $dims['width'] . 'x' . $dims['height'] . '.avif', $created, 'image/avif', $inv['files'] );
 			self::verify( $small, 'image/avif' );
 		}
 		return array( $full, $small, true === $rotated );
@@ -421,12 +480,25 @@ final class Media_Converter {
 	 * @param string           $name    Desired file name.
 	 * @param array            $created Created paths (by reference).
 	 * @param string           $mime    Output MIME type.
-	 * @return array{path:string,width:int,height:int}
+	 * @param array            $replaced File names (keys) this conversion moves to the backup.
+	 * @return array{path:string,final:string,width:int,height:int} path = where it was written, final = where it ends up.
 	 */
-	private static function save( $editor, $dir, $name, array &$created, $mime ) {
-		// Only an existing file with the same output extension forces a new name.
-		$name  = sanitize_file_name( $name );
-		$dest  = $dir . '/' . ( file_exists( $dir . '/' . $name ) ? wp_unique_filename( $dir, $name ) : $name );
+	private static function save( $editor, $dir, $name, array &$created, $mime, array $replaced = array() ) {
+		$name = sanitize_file_name( $name );
+		$temp = false;
+		if ( file_exists( $dir . '/' . $name ) ) {
+			if ( isset( $replaced[ $name ] ) ) {
+				// The clean name belongs to an old file that this conversion moves to the backup.
+				// Encode under a temporary name and take the clean name once the old file is gone,
+				// instead of drifting to "-1", "-1-1" on every re-conversion.
+				$temp = true;
+				$dest = $dir . '/' . wp_unique_filename( $dir, pathinfo( $name, PATHINFO_FILENAME ) . '-wpcu-new.' . pathinfo( $name, PATHINFO_EXTENSION ) );
+			} else {
+				$dest = $dir . '/' . wp_unique_filename( $dir, $name );
+			}
+		} else {
+			$dest = $dir . '/' . $name;
+		}
 		$saved = $editor->save( $dest, $mime );
 		if ( is_wp_error( $saved ) ) {
 			if ( is_file( $dest ) ) {
@@ -438,6 +510,7 @@ final class Media_Converter {
 		$created[] = wp_normalize_path( $saved['path'] );
 		return array(
 			'path'   => wp_normalize_path( $saved['path'] ),
+			'final'  => $temp ? wp_normalize_path( $dir . '/' . $name ) : wp_normalize_path( $saved['path'] ),
 			'width'  => (int) $saved['width'],
 			'height' => (int) $saved['height'],
 		);
@@ -509,7 +582,7 @@ final class Media_Converter {
 		$mime = $full ? 'image/avif' : 'image/jpeg';
 		$meta = $inv['meta'];
 		// Compute the path ourselves because Windows path separators differ from WordPress strings.
-		$relative = self::rel( $primary['path'] );
+		$relative = self::rel( $primary['final'] );
 		$meta['file'] = $relative;
 		$meta['width'] = $primary['width'];
 		$meta['height'] = $primary['height'];
@@ -517,7 +590,7 @@ final class Media_Converter {
 		$meta['sizes'] = array();
 		if ( $small ) {
 			$meta['sizes'][ $s['small_name'] ] = array(
-				'file' => wp_basename( $small['path'] ),
+				'file' => wp_basename( $small['final'] ),
 				'width' => $small['width'],
 				'height' => $small['height'],
 				'mime-type' => 'image/avif',
@@ -529,25 +602,29 @@ final class Media_Converter {
 			$meta['image_meta']['orientation'] = 1;
 		}
 		$outputs = array(
-			'jpeg' => $jpeg ? self::rel( $jpeg['path'] ) : '',
+			'jpeg' => $jpeg ? self::rel( $jpeg['final'] ) : '',
 			'jpeg_width' => $jpeg ? $jpeg['width'] : 0,
-			'avif_full' => $full ? self::rel( $full['path'] ) : '',
+			'avif_full' => $full ? self::rel( $full['final'] ) : '',
 			'avif_full_width' => $full ? $full['width'] : 0,
 			'avif_full_height' => $full ? $full['height'] : 0,
-			'avif_small' => $small ? self::rel( $small['path'] ) : '',
+			'avif_small' => $small ? self::rel( $small['final'] ) : '',
 			'avif_small_width' => $small ? $small['width'] : 0,
 			'avif_small_height' => $small ? $small['height'] : 0,
 			'avif_error' => $avif_error,
 			'policy' => $s,
 		);
 		update_attached_file( $id, $relative );
-		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $primary['path'] ) {
+		if ( wp_normalize_path( (string) get_attached_file( $id, true ) ) !== $primary['final'] ) {
 			throw new \RuntimeException( __( 'The new file path could not be stored correctly.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 		}
 		$wpdb->update( $wpdb->posts, array( 'post_mime_type' => $mime ), array( 'ID' => $id ) );
 		delete_post_meta( $id, '_wp_attachment_backup_sizes' );
-		if ( $s['set_flag'] ) {
+		// The marker means "follows the ALPS size policy" (ALPS also marks single-size uploads),
+		// so it is set only when the policy really matches ALPS, and removed otherwise.
+		if ( Media_Policy::wants_flag( $s ) ) {
 			update_post_meta( $id, Media_Policy::ALPS_FLAG, 1 );
+		} else {
+			delete_post_meta( $id, Media_Policy::ALPS_FLAG );
 		}
 		update_post_meta( $id, Media_Policy::OUTPUT_META, $outputs );
 		wp_update_attachment_metadata( $id, $meta );
@@ -556,6 +633,12 @@ final class Media_Converter {
 
 	private static function rollback( $id, $backup, $n, $applied, array $created, array $moved, array $inv ) {
 		$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
+		// Every created path is a new file this run wrote (save() never overwrites), so it can go first.
+		foreach ( $created as $path ) {
+			if ( is_file( $path ) ) {
+				@unlink( $path ); // phpcs:ignore
+			}
+		}
 		if ( $backup && null !== $n ) {
 			$qdir = $backup->quarantine_dir( $n ) . '/orig';
 			foreach ( array_reverse( $moved ) as $rel ) {
@@ -567,11 +650,6 @@ final class Media_Converter {
 				} catch ( \Exception $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement
 					// Reported through the item's failure; the before-images stay in the backup set.
 				}
-			}
-		}
-		foreach ( $created as $path ) {
-			if ( is_file( $path ) && ! isset( $inv['files'][ wp_basename( $path ) ] ) ) {
-				@unlink( $path ); // phpcs:ignore
 			}
 		}
 		clean_post_cache( $id );
@@ -608,9 +686,21 @@ final class Media_Converter {
 				throw new \RuntimeException( sprintf( __( 'Row %2$s in %1$s was edited after the cleanup; not restoring this image.', 'wp-cleanup' ), $table, $row_id ) );
 			}
 		}
-		$moved = (array) ( isset( $extra['moved'] ) ? $extra['moved'] : array() );
+		$moved   = (array) ( isset( $extra['moved'] ) ? $extra['moved'] : array() );
+		$created = (array) ( isset( $extra['created'] ) ? $extra['created'] : array() );
+		$parked  = $backup->dir . '/files/' . (int) $n . '/created';
+		$park    = static function ( $rel ) use ( $uploads, $parked ) {
+			if ( is_file( $uploads . '/' . $rel ) ) {
+				wp_mkdir_p( dirname( $parked . '/' . $rel ) );
+				if ( ! @rename( $uploads . '/' . $rel, $parked . '/' . $rel ) ) { // phpcs:ignore
+					/* translators: %s: file */
+					throw new \RuntimeException( sprintf( __( 'Could not move %s out of the way.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+			}
+		};
 		foreach ( $moved as $rel ) {
-			if ( file_exists( $uploads . '/' . $rel ) ) {
+			// A new file may carry the old file's clean name; that one is ours and is parked first.
+			if ( file_exists( $uploads . '/' . $rel ) && ! in_array( $rel, $created, true ) ) {
 				/* translators: %s: file */
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
 				throw new \RuntimeException( sprintf( __( '%s exists again; not overwriting it.', 'wp-cleanup' ), $rel ) );
@@ -622,7 +712,10 @@ final class Media_Converter {
 			}
 		}
 
-		// Old files back first: harmless while the new images still exist.
+		foreach ( array_intersect( $created, $moved ) as $rel ) {
+			$park( $rel );
+		}
+		// Old files back first: harmless while the other new images still exist.
 		foreach ( $moved as $rel ) {
 			if ( ! @rename( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore
 				/* translators: %s: file */
@@ -632,12 +725,8 @@ final class Media_Converter {
 		}
 		$backup->replay_sql( $n );
 		// The new images are now unused; park them in the backup set instead of deleting.
-		$parked = $backup->dir . '/files/' . (int) $n . '/created';
-		foreach ( (array) ( isset( $extra['created'] ) ? $extra['created'] : array() ) as $rel ) {
-			if ( is_file( $uploads . '/' . $rel ) ) {
-				wp_mkdir_p( dirname( $parked . '/' . $rel ) );
-				@rename( $uploads . '/' . $rel, $parked . '/' . $rel ); // phpcs:ignore
-			}
+		foreach ( array_diff( $created, $moved ) as $rel ) {
+			$park( $rel );
 		}
 		clean_post_cache( $id );
 		Media_Inventory::flush();

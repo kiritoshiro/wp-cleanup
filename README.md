@@ -25,15 +25,17 @@ WordPress often keeps an original, a scaled copy, many thumbnail sizes, and opti
 - **One full AVIF**, at most **1920 px**, when the server can encode and verify it.
 - **One small AVIF**, at most **768 px**, when the full AVIF exceeds that size.
 
-When AVIF encoding succeeds, AVIF is the attachment file and the target of rewritten links. With the optional JPEG enabled, WordPress images rendered through wp_get_attachment_image() use a picture element with an AVIF source and JPEG fallback for older browsers. Direct URLs, CSS backgrounds, and stored image HTML use AVIF. Changes to the image policy must be saved before conversion. If the first AVIF editor fails and GD supports the source and AVIF, the plugin retries with GD. If both attempts fail, the plugin keeps the single JPEG and reports the observed image dimensions and decoder error. Attachments converted by v0.6.1 with JPEG as the main file remain untouched until you restore that image from its backup and convert it again; a policy change does not silently replace an existing attachment. Turn the fallback off under *Image policy* to keep AVIF only; if AVIF encoding then fails, the original image is left untouched.
+When AVIF encoding succeeds, AVIF is the attachment file and the target of rewritten links. With the optional JPEG enabled, WordPress images rendered through wp_get_attachment_image() (featured images, most theme markup) and images in post content that carry WordPress's `wp-image-{id}` class use a picture element with an AVIF source and JPEG fallback for older browsers. Images already inside a `<picture>` are left alone. Direct URLs (for example from `wp_get_attachment_image_src()`), CSS backgrounds and other stored HTML use AVIF only. Changes to the image policy must be saved before conversion. If the first AVIF editor fails and GD supports the source and AVIF, the plugin retries with GD. If both attempts fail, the plugin keeps the single JPEG and reports the observed image dimensions and decoder error. Attachments converted by v0.6.1 with JPEG as the main file remain untouched until you restore that image from its backup and convert it again; a policy change does not silently replace an existing attachment. Turn the fallback off under *Image policy* to keep AVIF only; if AVIF encoding then fails, the original image is left untouched.
 
 The plugin encodes and verifies new files before changing the database. It rewrites references in posts, meta, options and comments to the selected main file, including serialized and JSON-escaped data, then moves all old sizes, originals and sidecars into a restorable backup set. Rewritten references are shown as separate **Location**, **Original**, and **New** rows in each conversion result and under **Backups → Contents**. The rewrite count includes saved post revisions and database fields; it is not the number of current pages using the image. Revisions are labeled with their parent post. A failure while rewriting or moving files rolls back that image.
 
-The JPEG switch, size limits, JPEG quality and ALPS compatibility flag can be changed under *Image policy*. The default flag marks converted attachments for the Adventistai ALPS theme. GIF and WebP (which may be animated), site icons, custom headers and backgrounds, and offloaded files are not converted.
+The JPEG switch, size limits, JPEG quality and ALPS marker can be changed under *Image policy*.
+
+**The ALPS marker** (`_alps_two_size_upload`) tells the Adventistai ALPS theme (3.28.2+) that an image follows its size policy: one full image of at most 1920 px plus an optional `alps-small` of at most 768 px. ALPS marks small uploads that only have one file too, and the plugin does the same. With the marker, ALPS maps old template sizes (`thumbnail`, `large`, `horiz__16x9--s`, …) to these files, and regenerating thumbnails does not bring back the old sizes. Without it, regeneration recreates `thumbnail`, `medium` and so on. The plugin sets the marker only while the policy matches those ALPS sizes, and removes it from converted images when the policy doesn't match or the option is off. Changing only this option never re-encodes images; the data check (below) brings existing markers in line. The Image policy box says whether the active theme uses the ALPS image policy. GIF and WebP (which may be animated), site icons, custom headers and backgrounds, and offloaded files are not converted.
 
 **Space is freed when the backup set is deleted** on the Backups tab, after checking the site. Until then, **Restore** puts the old files and rewritten database values back. It refuses to overwrite edits made after conversion.
 
-JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion only produces JPEG when the fallback is enabled. AVIF-only mode requires AVIF encoding support. AVIF filenames only get a numeric suffix when a file with the same AVIF name already exists, such as two attachments sharing a basename.
+JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion only produces JPEG when the fallback is enabled. AVIF-only mode requires AVIF encoding support. New files get a numeric suffix only when another attachment's file already has that name. When the clean name belongs to an old file of the same image (re-converting after a policy change), the new file is written under a temporary name and takes the clean name once the old file is in the backup, so names don't drift to `-1`, `-1-1`. Each conversion result and backup entry lists every backed-up and new file with its dimensions, format and size.
 
     wp cleanup images status
     wp cleanup images convert --limit=20 --dry-run
@@ -43,6 +45,27 @@ Limits:
 - URLs stored in custom plugin tables are not rewritten. Yoast indexables are one example and normally refresh themselves.
 - A text mention of the exact same uploads path on another site could also be rewritten.
 - New uploads keep generating their usual sizes unless the theme limits them.
+
+### Server statistics and the image data check
+
+The top of **Images** always shows, from the last library check:
+- every image file on the server and the space it uses
+- how many are Media Library images (with all their files) and how many have no attachment
+- a breakdown by format (AVIF, JPEG, PNG, WebP, GIF…)
+- the space still held in backup sets
+
+These stay meaningful after every image is converted.
+
+Every library check also compares each image's saved WordPress data with its files, and lists anything that doesn't match:
+- file paths stored as absolute or Windows paths (made by 0.2.0 on Windows web servers)
+- a wrong MIME type
+- wrong saved dimensions or file sizes
+- sizes listed for files that don't exist
+- a small AVIF that exists but isn't listed, or is listed but not recorded
+- recorded fallback/AVIF files that are missing or have the wrong width
+- an ALPS marker that disagrees with the policy
+
+**Repair** fixes these by changing only WordPress data, never image files. Each image is re-checked first, and each repair can be undone from **Backups** unless the image changed since. Problems that need a person, such as a main file missing from disk, are listed separately and never "repaired". `wp cleanup images repair [--dry-run]` does the same from WP-CLI.
 
 ### Current files on the server
 
@@ -148,6 +171,7 @@ cd /path/to/throwaway-wordpress
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/run.php
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images.php   # needs AVIF support
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.php
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/integrity.php   # data check, ALPS marker, file details; set WPCU_ALPS_DIR to test against the real ALPS image code
 ```
 
 The usage suite (48 assertions) covers:

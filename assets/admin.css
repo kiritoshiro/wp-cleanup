@@ -105,3 +105,15 @@
 .wpcu-catalog-image .wpcu-scroll { margin: 2px 0 12px 50px; }
 .wpcu-catalog-table code, .wpcu-unregistered code { overflow-wrap: anywhere; word-break: break-word; }
 @media (max-width: 600px) { .wpcu-catalog-image .wpcu-scroll { margin-left: 0; } }
+
+/* Images: server statistics and image data check */
+.wpcu-stats { margin-top: 8px; }
+.wpcu-format-table { max-width: 900px; margin: 8px 0 16px; }
+.wpcu-format-table td, .wpcu-format-table th { white-space: nowrap; }
+.wpcu-bar { display: inline-block; width: 120px; height: 8px; background: #dcdcde; border-radius: 4px; vertical-align: middle; overflow: hidden; }
+.wpcu-bar > span { display: block; height: 100%; background: #2271b1; }
+.wpcu-issues { padding-bottom: 8px; }
+.wpcu-issue-list { margin: 8px 0 8px 4px; }
+.wpcu-issue-list > li { margin-bottom: 8px; }
+.wpcu-issue-list ul { margin: 4px 0 0 24px; list-style: disc; }
+.wpcu-issue-manual { color: #b32d2e; }

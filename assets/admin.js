@@ -177,6 +177,19 @@
 			} );
 		};
 
+		// "1920×1280 · AVIF · 58.3 KB" for a file info object from the server.
+		var infoText = function ( info ) {
+			if ( ! info ) { return ''; }
+			var parts = [];
+			if ( info.width && info.height ) { parts.push( info.width + '×' + info.height ); }
+			if ( info.mime ) { parts.push( String( info.mime ).replace( 'image/', '' ).toUpperCase() ); }
+			if ( 'number' === typeof info.bytes ) {
+				var b = info.bytes;
+				parts.push( b >= 1048576 ? ( b / 1048576 ).toFixed( 1 ) + ' MB' : ( b >= 1024 ? ( b / 1024 ).toFixed( 1 ) + ' KB' : b + ' B' ) );
+			}
+			return parts.join( ' · ' );
+		};
+
 		var appendList = function ( cell, label, entries, describe ) {
 			if ( ! entries || ! entries.length ) { return; }
 			var details = document.createElement( 'details' );
@@ -186,9 +199,11 @@
 			var list = document.createElement( 'ul' );
 			entries.forEach( function ( entry ) {
 				var item = document.createElement( 'li' );
-				if ( 'object' === typeof entry ) {
+				if ( entry && 'object' === typeof entry && 'where' in entry ) {
 					item.className = 'wpcu-reference-change';
-					[ [ wpCleanup.mediaLocation, entry.where ], [ wpCleanup.mediaOriginal, entry.from ], [ wpCleanup.mediaNew, entry.to ] ].forEach( function ( pair ) {
+					var fromInfo = infoText( entry.from_info );
+					var toInfo = infoText( entry.to_info );
+					[ [ wpCleanup.mediaLocation, entry.where ], [ wpCleanup.mediaOriginal, entry.from + ( fromInfo ? ' — ' + fromInfo : '' ) ], [ wpCleanup.mediaNew, entry.to + ( toInfo ? ' — ' + toInfo : '' ) ] ].forEach( function ( pair ) {
 						var line = document.createElement( 'div' );
 						var name = document.createElement( 'strong' );
 						name.textContent = pair[ 0 ] + ': ';
@@ -264,7 +279,13 @@
 								var resultCell = row.querySelector( '.wpcu-result' );
 								resultCell.textContent = r.status + ': ' + r.message;
 								appendList( resultCell, wpCleanup.mediaReferences, r.reference_changes, function ( item ) { return item.where + ': ' + item.from + ' → ' + item.to; } );
-								appendList( resultCell, wpCleanup.mediaOriginals, r.backed_up, function ( item ) { return item; } );
+								var fileLine = function ( item ) {
+									if ( 'string' === typeof item ) { return item; }
+									var text = infoText( item );
+									return ( item.role ? item.role + ': ' : '' ) + item.path + ( text ? ' — ' + text : '' );
+								};
+								appendList( resultCell, wpCleanup.mediaOriginals, r.backed_up_info && r.backed_up_info.length ? r.backed_up_info : r.backed_up, fileLine );
+								appendList( resultCell, wpCleanup.mediaCreated, r.created_info, fileLine );
 								row.classList.add( 'wpcu-row-' + r.status );
 								var box = row.querySelector( 'input[type=checkbox]' );
 								box.checked = false;
