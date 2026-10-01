@@ -196,7 +196,9 @@ final class Media_Integrity {
 			// 5. ALPS marker: present exactly when the policy matches ALPS and it is switched on.
 			$wants = Media_Policy::wants_flag( $s );
 			$has   = (bool) get_post_meta( $id, Media_Policy::ALPS_FLAG, true );
-			if ( $wants !== $has ) {
+			// The ALPS theme marks every upload it converts itself; the marker is its own, not ours to remove.
+			$theme_made = isset( $outputs['by'] ) && 'alps-theme' === $outputs['by'];
+			if ( $wants !== $has && ! ( $has && $theme_made ) ) {
 				$fix['flag'] = $wants;
 				if ( $wants ) {
 					$add( 'flag', __( 'The ALPS marker is missing, so the ALPS theme would regenerate its old image sizes for this image.', 'wp-cleanup' ) );

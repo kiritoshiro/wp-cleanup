@@ -33,6 +33,13 @@ The JPEG switch, size limits, JPEG quality and ALPS marker can be changed under 
 
 **The ALPS marker** (`_alps_two_size_upload`) tells the Adventistai ALPS theme (3.28.2+) that an image follows its size policy: one full image of at most 1920 px plus an optional `alps-small` of at most 768 px. ALPS marks small uploads that only have one file too, and the plugin does the same. With the marker, ALPS maps old template sizes (`thumbnail`, `large`, `horiz__16x9--s`, …) to these files, and regenerating thumbnails does not bring back the old sizes. Without it, regeneration recreates `thumbnail`, `medium` and so on. The plugin sets the marker only while the policy matches those ALPS sizes, and removes it from converted images when the policy doesn't match or the option is off. Changing only this option never re-encodes images; the data check (below) brings existing markers in line. The Image policy box says whether the active theme uses the ALPS image policy. GIF and WebP (which may be animated), site icons, custom headers and backgrounds, and offloaded files are not converted.
 
+**New uploads with the ALPS theme (3.29+).** The theme converts uploads itself into the same three files (full AVIF, `alps-small` AVIF, one JPEG fallback) and records them in the same `_wpcu_image_outputs` meta, marked `by: alps-theme`. When this plugin's policy fits ALPS, the theme uses its sizes and JPEG quality. The plugin therefore:
+- lists those uploads as already converted, including during the week the theme keeps the original before deleting it;
+- leaves the theme's marker alone in the data check;
+- lets the theme serve them, since the theme writes its own AVIF + JPEG picture markup and this plugin leaves existing `<picture>` markup alone.
+
+This page is then for older images. Deleting any attachment also deletes its recorded JPEG fallback, unless another attachment uses that file.
+
 **Space is freed when the backup set is deleted** on the Backups tab, after checking the site. Until then, **Restore** puts the old files and rewritten database values back. It refuses to overwrite edits made after conversion.
 
 JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion only produces JPEG when the fallback is enabled. AVIF-only mode requires AVIF encoding support. New files get a numeric suffix only when another attachment's file already has that name. When the clean name belongs to an old file of the same image (re-converting after a policy change), the new file is written under a temporary name and takes the clean name once the old file is in the backup, so names don't drift to `-1`, `-1-1`. Each conversion result and backup entry lists every backed-up and new file with its dimensions, format and size.
@@ -44,7 +51,7 @@ JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 
 Limits:
 - URLs stored in custom plugin tables are not rewritten. Yoast indexables are one example and normally refresh themselves.
 - A text mention of the exact same uploads path on another site could also be rewritten.
-- New uploads keep generating their usual sizes unless the theme limits them.
+- New uploads keep generating their usual sizes unless the theme limits them (the ALPS theme does).
 
 ### Server statistics and the image data check
 
@@ -184,6 +191,7 @@ WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/images
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.php
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/integrity.php   # data check, ALPS marker, file details; set WPCU_ALPS_DIR to test against the real ALPS image code
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/guard.php   # per-image lock, check before converting, timeout recovery
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/alps-theme.php   # uploads the ALPS theme converted itself; JPEG fallback removed on delete
 ```
 
 The usage suite (48 assertions) covers:
