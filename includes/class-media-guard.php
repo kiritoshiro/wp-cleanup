@@ -269,10 +269,11 @@ class Media_Guard {
 			return $out;
 		}
 		if ( $inv['compliant'] ) {
+		$out['current'] = Media_Inventory::current_row( $id, $inv );
 			if ( Media_Converter::can_trim_small( $id, 8192, $inv )
 				&& ! Media_Converter::can_trim_small( $id, $gap, $inv ) ) {
-				$out['state'] = 'skip';
-				$out['message'] = __( 'The full and small AVIFs differ by more than the selected gap; nothing changed.', 'wp-cleanup' );
+				$out['state'] = 'done';
+				$out['message'] = __( 'Already converted. The AVIF sizes differ by more than the selected gap, so both stay.', 'wp-cleanup' );
 				return $out;
 			}
 			if ( Media_Converter::can_trim_small( $id, $gap, $inv ) ) {

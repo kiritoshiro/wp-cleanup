@@ -1050,11 +1050,11 @@ final class Admin {
 			if ( $has_usage ) {
 				echo '<td class="wpcu-used" data-sort-value="' . (int) ( isset( $report['use_counts'][ $i['id'] ] ) ? $report['use_counts'][ $i['id'] ] : 0 ) . '">' . self::uses_html( (int) $i['id'], $report ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- uses_html() escapes every part.
 			}
-			echo '<td>' . esc_html( str_replace( 'image/', '', $i['mime'] ) ) . '</td>';
-			echo '<td class="num" data-sort-value="' . (int) ( $i['width'] * $i['height'] ) . '">' . esc_html( $i['width'] . '×' . $i['height'] ) . '</td>';
-			echo '<td class="num" data-sort-value="' . (int) $i['files'] . '">' . esc_html( number_format_i18n( $i['files'] ) ) . '</td>';
-			echo '<td class="num" data-sort-value="' . (int) $i['strays'] . '">' . ( $i['strays'] ? esc_html( number_format_i18n( $i['strays'] ) ) : '<span class="wpcu-muted">–</span>' ) . '</td>';
-			echo '<td class="num" data-sort-value="' . (int) $i['bytes'] . '">' . esc_html( size_format( $i['bytes'], 1 ) ) . '</td>';
+			echo '<td class="wpcu-format">' . esc_html( str_replace( 'image/', '', $i['mime'] ) ) . '</td>';
+			echo '<td class="num wpcu-size" data-sort-value="' . (int) ( $i['width'] * $i['height'] ) . '">' . esc_html( $i['width'] . '×' . $i['height'] ) . '</td>';
+			echo '<td class="num wpcu-file-count" data-sort-value="' . (int) $i['files'] . '">' . esc_html( number_format_i18n( $i['files'] ) ) . '</td>';
+			echo '<td class="num wpcu-stray-count" data-sort-value="' . (int) $i['strays'] . '">' . ( $i['strays'] ? esc_html( number_format_i18n( $i['strays'] ) ) : '<span class="wpcu-muted">–</span>' ) . '</td>';
+			echo '<td class="num wpcu-disk" data-sort-value="' . (int) $i['bytes'] . '">' . esc_html( size_format( $i['bytes'], 1 ) ) . '</td>';
 			echo '<td class="wpcu-result">' . ( 'simplify' === $kind ? esc_html__( 'Already converted · select to remove the small AVIF when the gap matches.', 'wp-cleanup' ) : '' ) . '</td></tr>';
 		}
 		echo '</tbody></table></div>';
