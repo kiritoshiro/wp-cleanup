@@ -299,6 +299,8 @@ final class Media_Converter {
 			$result['backed_up'] = $moved;
 			$result['backed_up_info'] = self::info_list( $moved_info );
 			$result['created_info'] = self::info_list( $created_info );
+			Media_Inventory::flush();
+			$result['current'] = Media_Inventory::current_row( $id );
 			$result['message']     = sprintf(
 				/* translators: 1: files, 2: size before, 3: size after, 4: stored fields, 5: revisions */
 				__( '%1$d file(s), %2$s → %3$s; %4$d stored field(s) rewritten (%5$d in revisions). These are database records, not separate image uses.', 'wp-cleanup' ),
@@ -434,6 +436,7 @@ final class Media_Converter {
 			$result['backed_up'] = $moved;
 			$result['backed_up_info'] = self::info_list( $info );
 			$result['created_info'] = array();
+			$result['current'] = Media_Inventory::current_row( $id );
 			$result['message'] = __( 'Small AVIF moved to a restorable backup; full AVIF and any JPEG fallback unchanged.', 'wp-cleanup' );
 			return $result;
 		} catch ( \Exception $e ) {

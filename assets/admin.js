@@ -302,6 +302,24 @@
 						progress.value = done;
 						next();
 					};
+					var refreshRow = function ( row, current ) {
+						if ( ! row || ! current ) { return; }
+						row.querySelector( '.wpcu-name code' ).textContent = current.file;
+						row.setAttribute( 'data-search', row.getAttribute( 'data-search' ) + ' ' + String( current.file ).toLowerCase() );
+						row.querySelector( '.wpcu-format' ).textContent = String( current.mime ).replace( 'image/', '' );
+						var size = row.querySelector( '.wpcu-size' );
+						size.textContent = current.width + '×' + current.height;
+						size.setAttribute( 'data-sort-value', current.width * current.height );
+						var files = row.querySelector( '.wpcu-file-count' );
+						files.textContent = Number( current.files ).toLocaleString();
+						files.setAttribute( 'data-sort-value', current.files );
+						var strays = row.querySelector( '.wpcu-stray-count' );
+						strays.textContent = current.strays ? Number( current.strays ).toLocaleString() : '–';
+						strays.setAttribute( 'data-sort-value', current.strays );
+						var disk = row.querySelector( '.wpcu-disk' );
+						disk.textContent = current.disk;
+						disk.setAttribute( 'data-sort-value', current.bytes );
+					};
 					var mark = function ( r ) {
 						var row = media.querySelector( 'tr[data-id="' + r.id + '"]' );
 						if ( row ) {
@@ -340,6 +358,7 @@
 					};
 					// Outcome of a check that did not lead to a conversion request.
 					var settled = function ( c, afterLoss ) {
+						refreshRow( media.querySelector( 'tr[data-id="' + id + '"]' ), c.current );
 						if ( afterLoss && 'done' === c.state ) {
 							mark( { id: id, status: 'converted', message: wpCleanup.mediaFinishedLate } );
 						} else if ( afterLoss && 'ready' === c.state ) {
@@ -386,6 +405,7 @@
 						json.data.results.forEach( function ( r ) {
 							var row = media.querySelector( 'tr[data-id="' + r.id + '"]' );
 							if ( row ) {
+								refreshRow( row, r.current );
 								var resultCell = row.querySelector( '.wpcu-result' );
 								resultCell.textContent = r.status + ': ' + r.message;
 								appendList( resultCell, wpCleanup.mediaReferences, r.reference_changes, function ( item ) { return item.where + ': ' + item.from + ' → ' + item.to; } );

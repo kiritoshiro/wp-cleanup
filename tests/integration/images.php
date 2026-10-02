@@ -11,6 +11,7 @@
 
 use WPCleanup\Backup;
 use WPCleanup\Media_Converter;
+use WPCleanup\Media_Guard;
 use WPCleanup\Media_Inventory;
 use WPCleanup\Media_Files;
 use WPCleanup\Media_Orphan_Files;
@@ -424,6 +425,34 @@ $only_failed = Media_Converter::convert( $avif_fail, Backup::start() );
 remove_filter( 'wp_cleanup_media_verify', $reject_avif, 10 );
 wpcu_ok( 'failed' === $only_failed['status'] && $failure_files === $files_snapshot() && $failure_db == $db_snapshot(), 'AVIF failure without fallback leaves original and database unchanged' ); // phpcs:ignore
 delete_option( Media_Policy::OPTION );
+
+/* A 300 px gap always keeps the full AVIF and only omits a redundant small one. */
+WP_CLI::log( "\nSize gap" );
+$gap_cases = array(
+	array( 'near', 900, 600, 1 ),       // 900 - 768 = 132 px: full only.
+	array( 'boundary', 1068, 700, 1 ), // Exactly 300 px: full only.
+	array( 'far', 2114, 1182, 2 ),     // Full caps at 1920 px: 1152 px gap, so both.
+);
+$gap_ids = array();
+foreach ( $gap_cases as $case ) {
+	$gap_ids[ $case[0] ] = wpcu_attach( 'wpcut-gap-' . $case[0] . '.png', $case[1], $case[2], 'png' );
+}
+$gap_before = $files_snapshot();
+$gap_backup = Backup::start();
+foreach ( $gap_cases as $case ) {
+	$id = $gap_ids[ $case[0] ];
+	$check = Media_Guard::preflight( $id, true, false, 300 );
+	wpcu_ok( 'ready' === $check['state'], 'unconverted ' . $case[0] . ' image is ready with a 300 px gap' );
+	$result = Media_Converter::convert( $id, $gap_backup, false, 300 );
+	$outputs = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+	$avifs = glob( $dir . '/wpcut-gap-' . $case[0] . '*.avif' );
+	wpcu_ok( 'converted' === $result['status'] && 'image/avif' === get_post_mime_type( $id ) && ! empty( $outputs['avif_full'] ) && 'image/avif' === $result['current']['mime'] && $case[3] + 1 === $result['current']['files'], $case[0] . ' image creates a full AVIF and refreshes the row: ' . $result['message'] );
+	wpcu_ok( $case[3] === count( $avifs ) && ( 2 === $case[3] ) === ! empty( $outputs['avif_small'] ), $case[0] . ' image has exactly ' . $case[3] . ' AVIF file(s)' );
+	$after_check = Media_Guard::preflight( $id, true, false, 300 );
+	wpcu_ok( 'done' === $after_check['state'] && false === strpos( $after_check['message'], 'nothing changed' ), $case[0] . ' image reports the completed policy, not a skipped conversion' );
+}
+$gap_restored = Backup::open( $gap_backup->id )->restore();
+wpcu_ok( 3 === count( $gap_restored ) && ! array_filter( $gap_restored, static function ( $item ) { return ! $item['ok']; } ) && $gap_before === $files_snapshot(), 'all gap cases restore their original PNG files byte-identically' );
 
 /* A server-only JPEG can be backed up and restored independently. */
 $file_path = $subdir . '/wpcut-server.jpg';

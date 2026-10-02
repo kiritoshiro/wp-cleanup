@@ -125,6 +125,36 @@ final class Media_Inventory {
 	}
 
 	/**
+	 * Current attachment values for refreshing a media report row after a change.
+	 *
+	 * @param int        $id  Attachment id.
+	 * @param array|null $inv Inventory entry, when already loaded.
+	 * @return array|null
+	 */
+	public static function current_row( $id, $inv = null ) {
+		$inv = $inv ? $inv : self::attachment( $id );
+		if ( ! $inv ) {
+			return null;
+		}
+		$strays = array_filter(
+			$inv['files'],
+			static function ( $file ) {
+				return 'stray' === $file['role'];
+			}
+		);
+		return array(
+			'file'   => ltrim( $inv['rel_dir'] . '/' . wp_basename( get_attached_file( $id, true ) ), '/' ),
+			'mime'   => get_post_mime_type( $id ),
+			'width'  => (int) ( isset( $inv['meta']['width'] ) ? $inv['meta']['width'] : 0 ),
+			'height' => (int) ( isset( $inv['meta']['height'] ) ? $inv['meta']['height'] : 0 ),
+			'files'  => count( $inv['files'] ),
+			'strays' => count( $strays ),
+			'bytes'  => $inv['bytes'],
+			'disk'   => size_format( $inv['bytes'], 1 ),
+		);
+	}
+
+	/**
 	 * Already in the target shape: one JPEG and optional recorded AVIF alternatives.
 	 *
 	 * @param int   $id    Attachment id.
