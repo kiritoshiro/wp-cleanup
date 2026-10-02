@@ -131,3 +131,7 @@
 .wpcu-issue-list > li { margin-bottom: 8px; }
 .wpcu-issue-list ul { margin: 4px 0 0 24px; list-style: disc; }
 .wpcu-issue-manual { color: #b32d2e; }
+
+.wpcu-removal-progress { width: min(280px, 100%); vertical-align: middle; }
+.wpcu-removal-errors { margin: 0; color: #b32d2e; }
+.wpcu-row-deleted { opacity: .55; }
