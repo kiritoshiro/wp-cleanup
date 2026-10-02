@@ -102,7 +102,7 @@ final class Media_Converter {
 					return $result;
 				}
 				if ( ! $backup instanceof Backup ) {
-					throw new \RuntimeException( __( 'Images are only changed into a backup set.', 'wp-cleanup' ) );
+					throw new \RuntimeException( __( 'Images are only changed into a backup set.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
 				}
 				return self::trim_small( $id, $backup, $inv, $gap, $result );
 			}
