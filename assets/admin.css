@@ -52,6 +52,8 @@
 .wpcu-media-actions p { margin: 0; }
 .wpcu-media-option { display: flex; align-items: flex-start; gap: 8px; max-width: 900px; line-height: 1.5; }
 .wpcu-media-option input[type="checkbox"] { flex: 0 0 auto; margin: 2px 0 0; }
+.wpcu-media-gap { flex-wrap: wrap; align-items: center; }
+.wpcu-size-gap { width: 6rem; }
 .wpcu-media-details { max-width: 900px; margin: 4px 0 0 24px; }
 .wpcu-media-details summary { cursor: pointer; }
 .wpcu-media-actions .wpcu-media-help { margin-top: 4px; }

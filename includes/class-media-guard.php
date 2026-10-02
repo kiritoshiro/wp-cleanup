@@ -217,9 +217,10 @@ class Media_Guard {
 	 * @param int  $id            Attachment id.
 	 * @param bool $allow_slow    Convert even when the estimate exceeds the budget.
 	 * @param bool $after_timeout The last request for this image ended without an answer.
+	 * @param int  $gap           Selected-image size gap in pixels.
 	 * @return array
 	 */
-	public static function preflight( $id, $allow_slow = false, $after_timeout = false ) {
+	public static function preflight( $id, $allow_slow = false, $after_timeout = false, $gap = 0 ) {
 		$id  = (int) $id;
 		$out = array(
 			'id'       => $id,
@@ -268,6 +269,16 @@ class Media_Guard {
 			return $out;
 		}
 		if ( $inv['compliant'] ) {
+			if ( Media_Converter::can_trim_small( $id, 8192, $inv )
+				&& ! Media_Converter::can_trim_small( $id, $gap, $inv ) ) {
+				$out['state'] = 'skip';
+				$out['message'] = __( 'The full and small AVIFs differ by more than the selected gap; nothing changed.', 'wp-cleanup' );
+				return $out;
+			}
+			if ( Media_Converter::can_trim_small( $id, $gap, $inv ) ) {
+				$out['message'] = __( 'The selected size gap allows this small AVIF to be backed up while the full AVIF and any JPEG fallback stay.', 'wp-cleanup' );
+				return $out;
+			}
 			$out['state']   = 'done';
 			$out['message'] = __( 'Already follows the image policy.', 'wp-cleanup' );
 			return $out;
