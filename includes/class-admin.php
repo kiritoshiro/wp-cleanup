@@ -728,8 +728,7 @@ final class Admin {
 			wp_send_json_error( array( 'message' => __( 'Confirm that you have a full site backup first.', 'wp-cleanup' ) ), 400 );
 		}
 		try {
-			$raw_kind = isset( $_POST['kind'] ) ? wp_unslash( $_POST['kind'] ) : '';
-			$kind = is_string( $raw_kind ) ? sanitize_key( $raw_kind ) : '';
+			$kind = isset( $_POST['kind'] ) ? sanitize_key( sanitize_text_field( wp_unslash( $_POST['kind'] ) ) ) : '';
 			if ( 'start' === $kind ) {
 				wp_send_json_success( array( 'backup' => Backup::start()->id ) );
 			}
