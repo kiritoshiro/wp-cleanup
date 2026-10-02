@@ -437,78 +437,150 @@
 		} );
 	}
 
-	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-removal-form' ), function ( removalForm ) {
+	var setupRemoval = function ( form, kind ) {
+		var field = 'image' === kind ? 'ids[]' : 'paths[]';
+		var count = form.querySelector( '.wpcu-selection-count' );
+		var progress = form.querySelector( '.wpcu-removal-progress' );
+		var status = form.querySelector( '.wpcu-removal-status' );
+		var errors = form.querySelector( '.wpcu-removal-errors' );
+		var stopButton = form.querySelector( '.wpcu-removal-stop' );
+		var buttons = Array.prototype.slice.call( form.querySelectorAll( 'button:not(.wpcu-removal-stop)' ) );
+		var running = false;
+		var stopRequested = false;
 		var boxes = function () {
-			return Array.prototype.slice.call( document.querySelectorAll( 'input[name="ids[]"]' ) ).filter( function ( box ) {
-				return box.form === removalForm;
+			return Array.prototype.slice.call( document.querySelectorAll( 'input[name="' + field + '"]' ) ).filter( function ( box ) {
+				return box.form === form;
 			} );
 		};
-		var selectedIds = function () {
-			return new window.FormData( removalForm ).getAll( 'ids[]' );
+		var selected = function () {
+			return boxes().filter( function ( box ) { return box.checked && ! box.disabled; } );
 		};
-		var count = removalForm.querySelector( '.wpcu-selection-count' );
 		var updateCount = function () {
-			count.textContent = selectedIds().length + ' / 20';
+			count.textContent = boxes().filter( function ( box ) { return box.checked; } ).length;
 		};
-		Array.prototype.forEach.call( removalForm.querySelectorAll( '.wpcu-select-images' ), function ( button ) {
+		var request = function ( fields ) {
+			var body = new URLSearchParams();
+			body.append( 'action', 'wpcu_media_remove_step' );
+			body.append( '_ajax_nonce', wpCleanup.removeNonce );
+			body.append( 'confirm', '1' );
+			Object.keys( fields ).forEach( function ( key ) { body.append( key, fields[ key ] ); } );
+			return fetch( wpCleanup.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } ).then( function ( response ) {
+				return response.text().then( function ( raw ) {
+					var json;
+					try { json = JSON.parse( raw ); } catch ( e ) { throw new Error( wpCleanup.removeInterrupted ); }
+					if ( ! json || ! json.success ) {
+						throw new Error( json && json.data && json.data.message ? json.data.message : wpCleanup.removeInterrupted );
+					}
+					return json.data;
+				} );
+			}, function () { throw new Error( wpCleanup.removeInterrupted ); } );
+		};
+		var busy = function ( active, prior ) {
+			running = active;
+			buttons.forEach( function ( button ) { button.disabled = active; } );
+			boxes().forEach( function ( box, index ) {
+				box.disabled = active || prior[ index ] || box.getAttribute( 'data-wpcu-removed' ) === '1';
+			} );
+			stopButton.hidden = ! active;
+		};
+		Array.prototype.forEach.call( form.querySelectorAll( '.wpcu-select-images' ), function ( button ) {
 			button.addEventListener( 'click', function () {
+				if ( running ) { return; }
 				var mode = button.getAttribute( 'data-select-mode' );
-				var picked = 0;
 				boxes().forEach( function ( box ) {
-					box.checked = 'clear' !== mode && ! box.disabled && picked < 20 && ( 'all' === mode || '1' === box.getAttribute( 'data-lookalike' ) );
-					if ( box.checked ) { picked++; }
+					box.checked = 'clear' !== mode && ! box.disabled && ( 'all' === mode || '1' === box.getAttribute( 'data-lookalike' ) );
 				} );
 				updateCount();
 			} );
 		} );
-		Array.prototype.forEach.call( removalForm.querySelectorAll( '.wpcu-single-remove' ), function ( button ) {
+		Array.prototype.forEach.call( form.querySelectorAll( '.wpcu-single-remove' ), function ( button ) {
 			button.addEventListener( 'click', function () {
+				if ( running ) { return; }
 				var id = button.getAttribute( 'data-id' );
 				boxes().forEach( function ( box ) { box.checked = ! box.disabled && box.value === id; } );
 				updateCount();
-				if ( removalForm.requestSubmit ) {
-					removalForm.requestSubmit();
-				} else {
-					removalForm.querySelector( 'button[type="submit"]' ).click();
-				}
+				if ( form.requestSubmit ) { form.requestSubmit(); }
+				else { form.querySelector( 'button[type="submit"]' ).click(); }
 			} );
 		} );
-		removalForm.addEventListener( 'change', updateCount );
-		removalForm.addEventListener( 'input', updateCount );
+		form.addEventListener( 'change', updateCount );
+		form.addEventListener( 'input', updateCount );
 		window.addEventListener( 'pageshow', updateCount );
 		window.addEventListener( 'focus', updateCount );
+		stopButton.addEventListener( 'click', function () {
+			stopRequested = true;
+			stopButton.disabled = true;
+		} );
 		updateCount();
-		removalForm.addEventListener( 'submit', function ( event ) {
-			var selected = selectedIds().length;
-			updateCount();
-			if ( selected < 1 || selected > 20 ) {
-				event.preventDefault();
-				window.alert( wpCleanup.nothing + ' (1–20)' );
-			} else if ( ! removalForm.querySelector( '.wpcu-removal-confirm' ).checked ) {
-				event.preventDefault();
-				window.alert( wpCleanup.mediaConfirmBox );
-			} else if ( ! window.confirm( wpCleanup.confirmRemove.replace( '%d', selected ) ) ) {
-				event.preventDefault();
-			}
-		} );
-	} );
-
-	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-orphan-form' ), function ( form ) {
-		var count = form.querySelector( '.wpcu-selection-count' );
-		var selected = function () { return new window.FormData( form ).getAll( 'paths[]' ).length; };
-		var update = function () { count.textContent = selected() + ' / 20'; };
-		form.addEventListener( 'change', update );
-		window.addEventListener( 'pageshow', update );
-		update();
 		form.addEventListener( 'submit', function ( event ) {
-			var n = selected();
-			if ( n < 1 || n > 20 ) {
-				event.preventDefault();
-				window.alert( wpCleanup.nothing + ' (1–20)' );
-			} else if ( ! window.confirm( wpCleanup.confirmServerFiles.replace( '%d', n ) ) ) {
-				event.preventDefault();
-			}
+			event.preventDefault();
+			if ( running ) { return; }
+			var chosen = selected();
+			if ( ! chosen.length ) { window.alert( wpCleanup.nothing ); return; }
+			if ( ! form.querySelector( '[name="confirm"]' ).checked ) { window.alert( wpCleanup.mediaConfirmBox ); return; }
+			if ( ! window.confirm( ( 'image' === kind ? wpCleanup.confirmRemove : wpCleanup.confirmServerFiles ).replace( '%d', chosen.length ) ) ) { return; }
+			var total = chosen.length;
+			var prior = boxes().map( function ( box ) { return box.disabled; } );
+			var backup = '';
+			var done = 0;
+			var moved = 0;
+			stopRequested = false;
+			stopButton.disabled = false;
+			errors.textContent = '';
+			progress.max = total;
+			progress.value = 0;
+			progress.hidden = false;
+			busy( true, prior );
+			var finish = function ( extra ) {
+				busy( false, prior );
+				updateCount();
+				var summary = wpCleanup.removeDone.replace( '%1$d', moved ).replace( '%2$d', total ).replace( '%3$s', backup || '—' );
+				status.textContent = summary + ( extra ? ' ' + extra : '' );
+			};
+			var next = function () {
+				if ( stopRequested || done === total ) {
+					finish( stopRequested ? wpCleanup.removeStopped : '' );
+					return;
+				}
+				var box = chosen[ done ];
+				status.textContent = done + ' / ' + total + ' · ' + ( backup || '…' );
+				var fields = { kind: kind, backup: backup };
+				fields[ 'image' === kind ? 'id' : 'path' ] = box.value;
+				request( fields ).then( function ( data ) {
+					var result = data.result;
+					if ( ! result ) { throw new Error( wpCleanup.removeInterrupted ); }
+					if ( 'deleted' === result.status ) {
+						moved++;
+						box.checked = false;
+						box.setAttribute( 'data-wpcu-removed', '1' );
+						var row = box.closest( 'tr' ) || box.closest( '.wpcu-dup-item' );
+						if ( row ) { row.classList.add( 'wpcu-row-deleted' ); }
+					} else {
+						var item = document.createElement( 'li' );
+						item.textContent = box.value + ': ' + result.message;
+						errors.appendChild( item );
+					}
+					done++;
+					progress.value = done;
+					updateCount();
+					next();
+				} ).catch( function ( error ) {
+					finish( String( error && error.message ? error.message : error ) );
+				} );
+			};
+			request( { kind: 'start' } ).then( function ( data ) {
+				backup = data.backup;
+				next();
+			} ).catch( function ( error ) {
+				finish( String( error && error.message ? error.message : error ) );
+			} );
 		} );
+	};
+	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-removal-form' ), function ( form ) {
+		setupRemoval( form, 'image' );
+	} );
+	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-orphan-form' ), function ( form ) {
+		setupRemoval( form, 'file' );
 	} );
 
 	Array.prototype.forEach.call( document.querySelectorAll( '.wpcu-sortable' ), function ( table ) {
