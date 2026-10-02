@@ -477,7 +477,7 @@
 		};
 		var busy = function ( active, prior ) {
 			running = active;
-			buttons.forEach( function ( button ) { button.disabled = active; } );
+			buttons.forEach( function ( button ) { button.disabled = active || button.getAttribute( 'data-wpcu-removed' ) === '1'; } );
 			boxes().forEach( function ( box, index ) {
 				box.disabled = active || prior[ index ] || box.getAttribute( 'data-wpcu-removed' ) === '1';
 			} );
@@ -554,7 +554,10 @@
 						box.checked = false;
 						box.setAttribute( 'data-wpcu-removed', '1' );
 						var row = box.closest( 'tr' ) || box.closest( '.wpcu-dup-item' );
-						if ( row ) { row.classList.add( 'wpcu-row-deleted' ); }
+						if ( row ) {
+							row.classList.add( 'wpcu-row-deleted' );
+							Array.prototype.forEach.call( row.querySelectorAll( 'button' ), function ( button ) { button.setAttribute( 'data-wpcu-removed', '1' ); } );
+						}
 					} else {
 						var item = document.createElement( 'li' );
 						item.textContent = box.value + ': ' + result.message;
