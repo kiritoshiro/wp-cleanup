@@ -22,11 +22,12 @@ final class Media_Converter {
 	 * @param int         $id      Attachment id.
 	 * @param Backup|null $backup  Backup set (required unless dry run).
 	 * @param bool        $dry_run Only report.
+	 * @param int         $gap     Selected-image size gap in pixels.
 	 * @return array{id:int,status:string,message:string,files:int,bytes_before:int,bytes_after:int}
 	 */
-	public static function convert( $id, $backup = null, $dry_run = false ) {
+	public static function convert( $id, $backup = null, $dry_run = false, $gap = 0 ) {
 		if ( $dry_run || ! $backup instanceof Backup ) {
-			return self::convert_unlocked( $id, $backup, $dry_run );
+			return self::convert_unlocked( $id, $backup, $dry_run, $gap );
 		}
 		$id = (int) $id;
 		// A gateway may have given up on an earlier request that is still converting this image.
@@ -45,8 +46,8 @@ final class Media_Converter {
 		try {
 			$work    = Media_Guard::work( $id );
 			$started = microtime( true );
-			$result  = self::convert_unlocked( $id, $backup, false );
-			if ( 'converted' === $result['status'] ) {
+			$result  = self::convert_unlocked( $id, $backup, false, $gap );
+			if ( 'converted' === $result['status'] && empty( $result['trimmed'] ) ) {
 				Media_Guard::record( microtime( true ) - $started, $work['work'] );
 			}
 			return $result;
@@ -61,12 +62,14 @@ final class Media_Converter {
 	 * @param int         $id      Attachment id.
 	 * @param Backup|null $backup  Backup set.
 	 * @param bool        $dry_run Only report.
+	 * @param int         $gap     Selected-image size gap in pixels.
 	 * @return array
 	 */
-	private static function convert_unlocked( $id, $backup, $dry_run ) {
+	private static function convert_unlocked( $id, $backup, $dry_run, $gap ) {
 		global $wpdb;
 		$id     = (int) $id;
 		$s      = Media_Policy::settings();
+		$gap    = max( 0, min( 8192, (int) $gap ) );
 		$result = array(
 			'id'           => $id,
 			'status'       => 'skipped',
@@ -92,8 +95,19 @@ final class Media_Converter {
 		$result['files']        = count( $inv['files'] );
 		$result['bytes_before'] = $inv['bytes'];
 		if ( $inv['compliant'] ) {
+			if ( self::can_trim_small( $id, $gap, $inv ) ) {
+				if ( $dry_run ) {
+					$result['status'] = 'planned';
+					$result['message'] = __( 'The small AVIF would move to a restorable backup; the full AVIF and any JPEG fallback would stay.', 'wp-cleanup' );
+					return $result;
+				}
+				if ( ! $backup instanceof Backup ) {
+					throw new \RuntimeException( __( 'Images are only changed into a backup set.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
+				}
+				return self::trim_small( $id, $backup, $inv, $gap, $result );
+			}
 			$result['status']  = 'compliant';
-			$result['message'] = __( 'Already follows the image policy.', 'wp-cleanup' );
+			$result['message'] = $gap ? __( 'Already follows the image policy or exceeds the selected size gap.', 'wp-cleanup' ) : __( 'Already follows the image policy.', 'wp-cleanup' );
 			return $result;
 		}
 		if ( $dry_run ) {
@@ -129,7 +143,7 @@ final class Media_Converter {
 				$avif_created = array();
 				$avif_editor  = '';
 				try {
-					list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor );
+					list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor, false, $gap );
 					$created = array_merge( $created, $avif_created );
 					if ( ! $jpeg ) {
 						$rotated = $avif_rotated;
@@ -143,7 +157,7 @@ final class Media_Converter {
 					if ( 'WP_Image_Editor_GD' !== $avif_editor && self::gd_can_encode_avif( self::source( $id, $inv ) ) ) {
 						$avif_created = array();
 						try {
-							list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor, true );
+							list( $full, $small, $avif_rotated ) = self::encode_avif( $id, $inv, $s, $avif_created, $avif_editor, true, $gap );
 							$created = array_merge( $created, $avif_created );
 							$avif_error = '';
 							if ( ! $jpeg ) {
@@ -208,7 +222,7 @@ final class Media_Converter {
 			// 5. Apply.
 			$applied = true;
 			Reference_Rewriter::apply( $changes );
-			self::update_attachment( $id, $inv, $jpeg, $full, $small, $rotated, $s, $avif_error );
+			self::update_attachment( $id, $inv, $jpeg, $full, $small, $rotated, $s, $avif_error, $gap );
 
 			// 6. Move old files into the backup set.
 			$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
@@ -304,6 +318,130 @@ final class Media_Converter {
 				$backup->set_result( $n, 'failed', $e->getMessage() );
 			}
 			$result['status']  = 'failed';
+			$result['message'] = $e->getMessage();
+			return $result;
+		}
+	}
+
+	/** Whether an existing recorded small AVIF can be removed under a chosen gap. */
+	public static function can_trim_small( $id, $gap, $inv = null ) {
+		$gap = (int) $gap;
+		if ( $gap < 1 || $gap > 8192 ) {
+			return false;
+		}
+		$inv = $inv ? $inv : Media_Inventory::attachment( $id );
+		if ( ! $inv || ! $inv['compliant'] || 'image/avif' !== get_post_mime_type( $id ) ) {
+			return false;
+		}
+		$meta = $inv['meta'];
+		$out  = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+		$s    = Media_Policy::settings();
+		$name = isset( $meta['sizes'][ $s['small_name'] ]['file'] ) ? (string) $meta['sizes'][ $s['small_name'] ]['file'] : '';
+		if ( ! is_array( $out ) || ! $name || wp_basename( $name ) !== $name || empty( $out['avif_small'] )
+			|| empty( $out['avif_full'] ) || wp_basename( $out['avif_small'] ) !== $name || (string) $meta['file'] !== (string) $out['avif_full'] ) {
+			return false;
+		}
+		$relative = ltrim( $inv['rel_dir'] . '/' . $name, '/' );
+		if ( wp_normalize_path( (string) $out['avif_small'] ) !== $relative || ! isset( $inv['files'][ $name ] )
+			|| is_link( $inv['dir'] . '/' . $name ) || ! is_file( $inv['dir'] . '/' . $name ) ) {
+			return false;
+		}
+		if ( ! isset( $meta['width'], $meta['height'], $meta['sizes'][ $s['small_name'] ]['width'], $meta['sizes'][ $s['small_name'] ]['height'] ) ) {
+			return false;
+		}
+		$full  = max( (int) $meta['width'], (int) $meta['height'] );
+		$small = max( (int) $meta['sizes'][ $s['small_name'] ]['width'], (int) $meta['sizes'][ $s['small_name'] ]['height'] );
+		if ( $full <= $small || $full - $small > $gap ) {
+			return false;
+		}
+		$info = Media_Files::describe( $inv['dir'] . '/' . $name );
+		return 'image/avif' === $info['mime'] && $info['width'] === (int) $meta['sizes'][ $s['small_name'] ]['width']
+			&& $info['height'] === (int) $meta['sizes'][ $s['small_name'] ]['height'];
+	}
+
+	/** Back up only the selected small AVIF, keeping the full AVIF and JPEG bytes intact. */
+	private static function trim_small( $id, Backup $backup, array $inv, $gap, array $result ) {
+		global $wpdb;
+		$s        = Media_Policy::settings();
+		$meta     = $inv['meta'];
+		$name     = $meta['sizes'][ $s['small_name'] ]['file'];
+		$relative = ltrim( $inv['rel_dir'] . '/' . $name, '/' );
+		$full     = wp_basename( $meta['file'] );
+		$old_key  = Reference_Rewriter::key( $inv['rel_dir'], $name );
+		$new_key  = Reference_Rewriter::key( $inv['rel_dir'], $full );
+		$map      = array( $old_key => $new_key );
+		$issues   = Media_Integrity::check( $id );
+		if ( $issues['issues'] ) {
+			$result['status'] = 'failed';
+			$result['message'] = __( 'This image has data or file issues. Check and repair it before removing a size.', 'wp-cleanup' );
+			return $result;
+		}
+		// A shared file must never be moved out from under another attachment.
+		$shared = $wpdb->get_var( $wpdb->prepare(
+			"SELECT post_id FROM {$wpdb->postmeta} WHERE post_id <> %d AND meta_key IN ('_wp_attached_file','_wp_attachment_metadata','_wp_attachment_backup_sizes','_wpcu_image_outputs') AND meta_value LIKE %s LIMIT 1",
+			$id, '%' . $wpdb->esc_like( $name ) . '%'
+		) );
+		if ( $shared || $wpdb->last_error ) {
+			$result['status'] = 'failed';
+			$result['message'] = __( 'The small file may belong to another attachment; it was not moved.', 'wp-cleanup' );
+			return $result;
+		}
+		$before   = Media_Files::describe( $inv['dir'] . '/' . $name );
+		$info     = array( $relative => array_merge( $before, array( 'role' => __( 'Small AVIF', 'wp-cleanup' ) ) ) );
+		$n        = null;
+		$moved    = array();
+		$applied  = false;
+		try {
+			$changes = ( new Reference_Rewriter( $map, array( $new_key => (int) $meta['width'] ) ) )->plan( array( $old_key ), $id );
+			$n = $backup->add_item( array(
+				'type' => 'media', 'id' => (string) $id, 'label' => $name,
+				'status' => 'eligible', 'owner' => '', 'count' => 1, 'bytes' => (int) $before['bytes'],
+			) );
+			self::write_before_images( $backup, $n, $id, $changes );
+			$applied = true;
+			Reference_Rewriter::apply( $changes );
+			unset( $meta['sizes'][ $s['small_name'] ] );
+			wp_update_attachment_metadata( $id, $meta );
+			$out = get_post_meta( $id, Media_Policy::OUTPUT_META, true );
+			$out = is_array( $out ) ? $out : array();
+			$out['avif_small'] = '';
+			$out['avif_small_width'] = 0;
+			$out['avif_small_height'] = 0;
+			$out['small_gap_px'] = (int) $gap;
+			update_post_meta( $id, Media_Policy::OUTPUT_META, $out );
+			$destination = $backup->quarantine_dir( $n ) . '/orig/' . $relative;
+			wp_mkdir_p( dirname( $destination ) );
+			if ( ! @rename( $inv['dir'] . '/' . $name, $destination ) ) { // phpcs:ignore -- Reversible move into the backup set.
+				throw new \RuntimeException( __( 'Could not move the small AVIF into the backup set.', 'wp-cleanup' ) );
+			}
+			$moved[] = $relative;
+			$refs = self::reference_changes( $changes, $map );
+			$backup->set_extra( $n, 'created', array() );
+			$backup->set_extra( $n, 'moved', $moved );
+			$backup->set_extra( $n, 'moved_info', $info );
+			$backup->set_extra( $n, 'created_info', array() );
+			$backup->set_extra( $n, 'reference_changes', $refs );
+			$backup->set_extra( $n, 'meta_hash', self::meta_hash( $id ) );
+			$backup->set_extra( $n, 'rows', array_map( static function ( $c ) {
+				return array( $c['table'], $c['pk'], $c['id'], $c['column'], md5( $c['new'] ) );
+			}, $changes ) );
+			$backup->set_result( $n, 'deleted', __( 'Small AVIF moved to backup; full AVIF and any JPEG fallback kept.', 'wp-cleanup' ) );
+			Media_Inventory::flush();
+			$result['status'] = 'converted';
+			$result['trimmed'] = true;
+			$result['bytes_after'] = $inv['bytes'] - (int) $before['bytes'];
+			$result['reference_changes'] = $refs;
+			$result['backed_up'] = $moved;
+			$result['backed_up_info'] = self::info_list( $info );
+			$result['created_info'] = array();
+			$result['message'] = __( 'Small AVIF moved to a restorable backup; full AVIF and any JPEG fallback unchanged.', 'wp-cleanup' );
+			return $result;
+		} catch ( \Exception $e ) {
+			self::rollback( $id, $backup, $n, $applied, array(), $moved, $inv );
+			if ( null !== $n ) {
+				$backup->set_result( $n, 'failed', $e->getMessage() );
+			}
+			$result['status'] = 'failed';
 			$result['message'] = $e->getMessage();
 			return $result;
 		}
@@ -441,7 +579,7 @@ final class Media_Converter {
 	}
 
 	/** Make a full AVIF and, when needed, one small AVIF. */
-	private static function encode_avif( $id, array $inv, array $s, array &$created, &$editor_class, $gd_only = false ) {
+	private static function encode_avif( $id, array $inv, array $s, array &$created, &$editor_class, $gd_only = false, $gap = 0 ) {
 		$source = self::source( $id, $inv );
 		$editor = self::avif_editor( $source, $gd_only );
 		if ( is_wp_error( $editor ) ) {
@@ -463,7 +601,7 @@ final class Media_Converter {
 		self::verify( $full, 'image/avif' );
 
 		$small = null;
-		if ( max( $full['width'], $full['height'] ) > $s['small_max'] ) {
+		if ( max( $full['width'], $full['height'] ) > $s['small_max'] + $gap ) {
 			$editor = self::avif_editor( $full['path'], $gd_only );
 			if ( is_wp_error( $editor ) ) {
 				throw new \RuntimeException( $editor->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the caller.
@@ -615,7 +753,7 @@ final class Media_Converter {
 		}
 	}
 
-	private static function update_attachment( $id, array $inv, $jpeg, $full, $small, $rotated, array $s, $avif_error ) {
+	private static function update_attachment( $id, array $inv, $jpeg, $full, $small, $rotated, array $s, $avif_error, $gap = 0 ) {
 		global $wpdb;
 		$primary = $full ? $full : $jpeg;
 		$mime = $full ? 'image/avif' : 'image/jpeg';
@@ -650,6 +788,7 @@ final class Media_Converter {
 			'avif_small_width' => $small ? $small['width'] : 0,
 			'avif_small_height' => $small ? $small['height'] : 0,
 			'avif_error' => $avif_error,
+			'small_gap_px' => $full && ! $small ? (int) $gap : 0,
 			'policy' => $s,
 		);
 		update_attached_file( $id, $relative );

@@ -83,7 +83,7 @@ final class Reference_Rewriter {
 				'table'   => $wpdb->postmeta,
 				'pk'      => 'meta_id',
 				'columns' => array( 'meta_value' ),
-				'exclude' => "post_id = {$id} AND meta_key IN ('_wp_attached_file','_wp_attachment_metadata','_wp_attachment_backup_sizes')",
+				'exclude' => "post_id = {$id} AND meta_key IN ('_wp_attached_file','_wp_attachment_metadata','_wp_attachment_backup_sizes','_wpcu_image_outputs')",
 			),
 			array(
 				'table'   => $wpdb->options,

@@ -98,6 +98,7 @@
 		var initiallyDisabled = Array.prototype.map.call( runButtons, function ( button ) { return button.disabled; } );
 		var stopRequested = false;
 		var slowBox = media.querySelector( '.wpcu-media-slow' );
+		var gapBox = media.querySelector( '.wpcu-size-gap' );
 		var policyForm = document.querySelector( '.wpcu-policy-form' );
 		var policyDirty = false;
 		if ( policyForm ) {
@@ -183,11 +184,11 @@
 				return lost( 0 );
 			} );
 		};
-		var post = function ( ids, backup ) {
-			return request( 'wpcu_media_batch', { backup: backup || '', 'ids[]': ids } );
+		var post = function ( ids, backup, gap ) {
+			return request( 'wpcu_media_batch', { backup: backup || '', 'ids[]': ids, gap: gap } );
 		};
-		var check = function ( id, backup, slow, waited ) {
-			return request( 'wpcu_media_check', { id: id, backup: backup || '', slow: slow ? '1' : '', waited: waited || '' } );
+		var check = function ( id, backup, slow, waited, gap ) {
+			return request( 'wpcu_media_check', { id: id, backup: backup || '', slow: slow ? '1' : '', waited: waited || '', gap: gap } );
 		};
 		var pause = function ( ms ) {
 			return new Promise( function ( resolve ) { window.setTimeout( resolve, ms ); } );
@@ -241,9 +242,13 @@
 		Array.prototype.forEach.call( runButtons, function ( button ) {
 			button.addEventListener( 'click', function () {
 				if ( policyDirty ) { status.textContent = wpCleanup.mediaPolicyUnsaved; return; }
+				var selected = 'selected' === button.getAttribute( 'data-scope' );
+				if ( selected && ! gapBox.reportValidity() ) { return; }
+				var gap = selected ? parseInt( gapBox.value, 10 ) : 0;
+				if ( ! Number.isInteger( gap ) || gap < 0 || gap > 8192 ) { gapBox.reportValidity(); return; }
 				var ids = mRows.filter( function ( row ) {
 					var box = row.querySelector( 'input[type=checkbox]' );
-					return ! box.disabled && ( 'all' === button.getAttribute( 'data-scope' ) || box.checked );
+					return ! box.disabled && ( selected ? box.checked : row.getAttribute( 'data-kind' ) === 'convert' );
 				} ).map( function ( row ) {
 					return row.getAttribute( 'data-id' );
 				} );
@@ -255,7 +260,7 @@
 					window.alert( wpCleanup.mediaConfirmBox );
 					return;
 				}
-				if ( ! window.confirm( wpCleanup.confirmMedia.replace( '%d', ids.length ) ) ) {
+				if ( ! window.confirm( ( selected ? wpCleanup.confirmGap : wpCleanup.confirmMedia ).replace( '%d', ids.length ) ) ) {
 					return;
 				}
 
@@ -321,7 +326,7 @@
 					// Ask the server about this image until it is no longer being converted. After a lost answer, `lostAfter` is how long that request ran.
 					var settle = function ( lostAfter ) {
 						if ( stopRequested ) { return Promise.resolve( null ); }
-						return check( id, backup, slowBox && slowBox.checked, lostAfter ).then( function ( result ) {
+						return check( id, backup, slowBox && slowBox.checked, lostAfter, gap ).then( function ( result ) {
 							if ( result.lost ) {
 								return pause( 5000 ).then( function () { waitedTotal += 5; return waitedTotal > 1200 ? { giveUp: true } : settle( lostAfter ? 1 : 0 ); } );
 							}
@@ -365,7 +370,7 @@
 						if ( ! c ) { finish( wpCleanup.mediaStopped ); return; }
 						if ( c.giveUp ) { finish( wpCleanup.mediaGiveUp ); return; }
 						if ( 'ready' !== c.state ) { settled( c, false ); return; }
-						return post( chunk, backup ).then( function ( result ) {
+						return post( chunk, backup, gap ).then( function ( result ) {
 							if ( result.lost ) { return recover( result ); }
 							handle( result.json );
 						} );

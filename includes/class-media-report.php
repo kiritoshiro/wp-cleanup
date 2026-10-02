@@ -36,6 +36,7 @@ final class Media_Report {
 			'strays'    => 0,
 			'stray_b'   => 0,
 			'items'     => array(),
+			'small_items' => array(),
 			'settings'  => Media_Policy::settings(),
 			'avif'      => Media_Policy::avif_supported(),
 		);
@@ -61,6 +62,20 @@ final class Media_Report {
 				}
 				if ( $inv['compliant'] ) {
 					++$report['compliant'];
+					if ( Media_Converter::can_trim_small( $id, 8192, $inv ) ) {
+						$report['small_items'][] = array(
+							'kind' => 'simplify',
+							'id' => $id,
+							'file' => ltrim( $inv['rel_dir'] . '/' . wp_basename( get_attached_file( $id, true ) ), '/' ),
+							'title' => get_the_title( $id ),
+							'mime' => get_post_mime_type( $id ),
+							'files' => count( $inv['files'] ),
+							'strays' => 0,
+							'bytes' => $inv['bytes'],
+							'width' => (int) $inv['meta']['width'],
+							'height' => (int) $inv['meta']['height'],
+						);
+					}
 					continue;
 				}
 				$strays = array_filter(
@@ -75,6 +90,7 @@ final class Media_Report {
 				$report['strays']  += count( $strays );
 				$report['stray_b'] += array_sum( wp_list_pluck( $strays, 'bytes' ) );
 				$report['items'][]  = array(
+					'kind'   => 'convert',
 					'id'     => $id,
 					'file'   => ltrim( $inv['rel_dir'] . '/' . wp_basename( get_attached_file( $id, true ) ), '/' ),
 					'title'  => get_the_title( $id ),
@@ -378,6 +394,7 @@ final class Media_Report {
 		}
 		$drop          = array_flip( array_map( 'intval', $ids ) );
 		$last['inventory_stale'] = true;
+		$last['small_items'] = array_values( array_filter( isset( $last['small_items'] ) ? $last['small_items'] : array(), static function ( $i ) use ( $drop ) { return ! isset( $drop[ (int) $i['id'] ] ); } ) );
 		$last['items'] = array_values(
 			array_filter(
 				$last['items'],
