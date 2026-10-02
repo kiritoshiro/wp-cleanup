@@ -34,7 +34,7 @@
 .wpcu-items .wpcu-reason { color: #50575e; font-size: 12px; max-width: 420px; }
 .wpcu-items tr[hidden] { display: none; }
 
-.wpcu-actions { position: sticky; bottom: 0; background: #f0f0f1; padding: 12px 0; border-top: 1px solid #c3c4c7; margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.wpcu-actions { position: sticky; z-index: 1; bottom: 0; background: #f0f0f1; padding: 12px 0; border-top: 1px solid #c3c4c7; margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .wpcu-actions p { margin: 4px 0 0; }
 .wpcu .button.wpcu-delete { background: #d63638; border-color: #d63638; }
 .wpcu .button.wpcu-delete:hover, .wpcu .button.wpcu-delete:focus { background: #b32d2e; border-color: #b32d2e; }
@@ -63,7 +63,8 @@
 .wpcu-row-failed .wpcu-result { color: #b32d2e; }
 .wpcu-row-deferred .wpcu-result, .wpcu-row-busy .wpcu-result { color: #996800; }
 
-.wpcu-scroll { max-width: 100%; overflow-x: auto; }
+/* Keep table checkboxes below the sticky action bar while rows scroll behind it. */
+.wpcu-scroll { position: relative; z-index: 0; max-width: 100%; overflow-x: auto; }
 .wpcu-scroll .wpcu-name { min-width: 220px; }
 .wpcu-thumb { display: block; object-fit: cover; background: #f0f0f1; border: 1px solid #dcdcde; border-radius: 2px; }
 .wpcu-thumb-col { width: 52px; }
