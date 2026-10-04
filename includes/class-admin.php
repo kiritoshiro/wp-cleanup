@@ -611,9 +611,10 @@ final class Admin {
 
 	/** Repair saved image data that no longer matches the files (fresh check per image). */
 	public function handle_media_repair() {
-		$this->guard( 'wpcu_media_repair' );
+		$this->guard();
+		check_admin_referer( 'wpcu_media_repair' );
 		$report = Media_Report::last();
-		$ids    = isset( $_POST['ids'] ) ? array_filter( array_map( 'absint', (array) wp_unslash( $_POST['ids'] ) ) ) : array(); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- guard() verified the nonce above.
+		$ids    = isset( $_POST['ids'] ) ? array_filter( array_map( 'absint', (array) wp_unslash( $_POST['ids'] ) ) ) : array();
 		if ( ! $ids && $report && ! empty( $report['issues'] ) ) {
 			$ids = array_map( 'intval', array_keys( $report['issues'] ) );
 		}
