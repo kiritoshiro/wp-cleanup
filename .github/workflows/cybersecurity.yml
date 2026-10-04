@@ -22,6 +22,9 @@ jobs:
       run: python -m pip install semgrep==1.178.0
     - name: Source security (Semgrep CE)
       run: python .github/security/semgrep_scan.py
+    - name: Admin handlers check capability and nonce
+      if: ${{ !cancelled() }}
+      run: python .github/security/check_admin_handlers.py
     - name: Install checksum-verified TruffleHog
       if: ${{ !cancelled() }}
       shell: bash
