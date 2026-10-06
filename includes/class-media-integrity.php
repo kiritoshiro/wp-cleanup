@@ -304,7 +304,7 @@ final class Media_Integrity {
 			}
 			$backup->set_extra( $n, 'meta_hash', self::meta_hash( $id ) );
 			$backup->set_extra( $n, 'fixed', $fixed );
-			$backup->set_result( $n, 'deleted', sprintf( _n( '%d problem repaired', '%d problems repaired', count( $fixed ), 'wp-cleanup' ), count( $fixed ) ) );
+			$backup->set_result( $n, 'deleted', sprintf( /* translators: %d: number of problems repaired */ _n( '%d problem repaired', '%d problems repaired', count( $fixed ), 'wp-cleanup' ), count( $fixed ) ) );
 			$result['status']  = 'repaired';
 			$result['fixed']   = $fixed;
 			$result['message'] = implode( ' ', $fixed );

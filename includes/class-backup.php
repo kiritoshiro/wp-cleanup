@@ -384,7 +384,7 @@ final class Backup {
 					if ( false === wp_next_scheduled( $event['hook'], isset( $event['args'] ) ? (array) $event['args'] : array() ) ) {
 						/* translators: %s: hook */
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
-						throw new \RuntimeException( sprintf( __( 'Event %s is still missing after restore.', 'wp-cleanup' ), $event['hook'] ) );
+						throw new \RuntimeException( sprintf( /* translators: %s: name of the scheduled event hook */ __( 'Event %s is still missing after restore.', 'wp-cleanup' ), $event['hook'] ) );
 					}
 				}
 				/* translators: %d: number of events */
@@ -463,7 +463,7 @@ final class Backup {
 		if ( $errors ) {
 			/* translators: 1: failed statements, 2: all statements, 3: last DB error */
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( sprintf( __( '%1$d of %2$d statements failed: %3$s', 'wp-cleanup' ), $errors, $lines, $wpdb->last_error ) );
+			throw new \RuntimeException( sprintf( /* translators: 1: failed statements, 2: total statements, 3: database error message */ __( '%1$d of %2$d statements failed: %3$s', 'wp-cleanup' ), $errors, $lines, $wpdb->last_error ) );
 		}
 		return $lines;
 	}

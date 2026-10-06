@@ -52,7 +52,7 @@ final class Storage {
 		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
 			/* translators: %s: directory path */
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'Could not create directory %s', 'wp-cleanup' ), $dir ) );
+			throw new \RuntimeException( sprintf( /* translators: %s: directory path */ __( 'Could not create directory %s', 'wp-cleanup' ), $dir ) );
 		}
 		$guards = array(
 			'index.php'  => "<?php\n// Silence is golden.\n",
@@ -84,7 +84,7 @@ final class Storage {
 		if ( false === $json || false === file_put_contents( self::path( $name ), $json, LOCK_EX ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
 			/* translators: %s: file name */
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'Could not write %s', 'wp-cleanup' ), $name ) );
+			throw new \RuntimeException( sprintf( /* translators: %s: file name */ __( 'Could not write %s', 'wp-cleanup' ), $name ) );
 		}
 	}
 

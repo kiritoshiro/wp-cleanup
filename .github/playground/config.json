@@ -1,0 +1,14 @@
+{
+  "mounts": [
+    {
+      "host": ".",
+      "vfs": "/wordpress/wp-content/plugins/wp-cleanup"
+    }
+  ],
+  "plugins": [
+    "wp-cleanup/wp-cleanup.php"
+  ],
+  "watch": [
+    "/wordpress/wp-content/plugins/wp-cleanup/"
+  ]
+}
