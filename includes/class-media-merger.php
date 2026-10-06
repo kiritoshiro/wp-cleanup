@@ -127,7 +127,7 @@ final class Media_Merger {
 			$partner = count( $backup->manifest['items'] ) - 1;
 			$backup->set_extra( $n, 'merge_partner', $partner );
 			$backup->set_extra( $partner, 'merge_partner', $n );
-			$backup->set_result( $n, 'deleted', sprintf( __( '%d reference fields redirected to image #%d.', 'wp-cleanup' ), count( $changes ), $keep ) );
+			$backup->set_result( $n, 'deleted', sprintf( /* translators: 1: number of reference fields, 2: image ID */ __( '%1$d reference fields redirected to image #%2$d.', 'wp-cleanup' ), count( $changes ), $keep ) );
 			Media_Report::forget_removed( array( $drop ) );
 			return $backup->id;
 		} catch ( \Exception $e ) {
@@ -296,6 +296,6 @@ final class Media_Merger {
 		}
 		$backup->replay_sql( $n );
 		wp_cache_flush();
-		return sprintf( __( '%d redirected reference fields restored.', 'wp-cleanup' ), count( $changes ) );
+		return sprintf( /* translators: %d: number of reference fields */ __( '%d redirected reference fields restored.', 'wp-cleanup' ), count( $changes ) );
 	}
 }

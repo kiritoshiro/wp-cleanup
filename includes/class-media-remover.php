@@ -109,7 +109,7 @@ final class Media_Remover {
 				$dst = $qdir . '/' . $rel;
 				wp_mkdir_p( dirname( $dst ) );
 				if ( ! apply_filters( 'wp_cleanup_media_move_file', true, $rel ) || ! @rename( $uploads . '/' . $rel, $dst ) ) { // phpcs:ignore -- reversible file move.
-					throw new \RuntimeException( sprintf( __( 'Could not move %s into the backup set.', 'wp-cleanup' ), $rel ) );
+					throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not move %s into the backup set.', 'wp-cleanup' ), $rel ) );
 				}
 				$moved[] = $rel;
 			}
@@ -117,7 +117,7 @@ final class Media_Remover {
 				throw new \RuntimeException( __( 'WordPress refused to delete the attachment.', 'wp-cleanup' ) );
 			}
 			$deleted = true;
-			$backup->set_result( $n, 'deleted', sprintf( __( '%d file(s) moved into the backup set.', 'wp-cleanup' ), count( $moved ) ) );
+			$backup->set_result( $n, 'deleted', sprintf( /* translators: %d: number of files */ __( '%d file(s) moved into the backup set.', 'wp-cleanup' ), count( $moved ) ) );
 			Media_Inventory::flush();
 			$result['status']  = 'deleted';
 			$result['message'] = __( 'Attachment removed; files are in the backup set.', 'wp-cleanup' );
@@ -206,6 +206,6 @@ final class Media_Remover {
 		clean_post_cache( $id );
 		wp_cache_flush();
 		Media_Inventory::flush();
-		return sprintf( __( '%d image file(s) and the attachment restored.', 'wp-cleanup' ), count( $moved ) );
+		return sprintf( /* translators: %d: number of image files */ __( '%d image file(s) and the attachment restored.', 'wp-cleanup' ), count( $moved ) );
 	}
 }

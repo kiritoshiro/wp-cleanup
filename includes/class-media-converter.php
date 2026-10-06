@@ -167,7 +167,7 @@ final class Media_Converter {
 							self::discard_outputs( $avif_created );
 							$full  = null;
 							$small = null;
-							$avif_error .= ' ' . sprintf( __( 'GD retry also failed: %s', 'wp-cleanup' ), $retry_error->getMessage() );
+							$avif_error .= ' ' . sprintf( /* translators: %s: error message */ __( 'GD retry also failed: %s', 'wp-cleanup' ), $retry_error->getMessage() );
 						}
 					}
 				}
@@ -311,7 +311,7 @@ final class Media_Converter {
 				$revision_count
 			);
 			if ( $avif_error && $jpeg ) {
-				$result['message'] .= ' ' . sprintf( __( 'The JPEG fallback is active; AVIF could not be made: %s', 'wp-cleanup' ), $avif_error );
+				$result['message'] .= ' ' . sprintf( /* translators: %s: AVIF error message */ __( 'The JPEG fallback is active; AVIF could not be made: %s', 'wp-cleanup' ), $avif_error );
 			}
 			return $result;
 		} catch ( \Exception $e ) {
@@ -483,13 +483,13 @@ final class Media_Converter {
 			$row = $change['row'];
 			if ( $wpdb->posts === $change['table'] && 'revision' === $row['post_type'] ) {
 				$parent = get_post( (int) $row['post_parent'] );
-				$where = sprintf( __( 'Revision #%1$d of %2$s (#%3$d), %4$s', 'wp-cleanup' ), $change['id'], $parent ? $parent->post_title : __( 'deleted post', 'wp-cleanup' ), (int) $row['post_parent'], $change['column'] );
+				$where = sprintf( /* translators: 1: revision ID, 2: parent post title, 3: parent post ID, 4: database column */ __( 'Revision #%1$d of %2$s (#%3$d), %4$s', 'wp-cleanup' ), $change['id'], $parent ? $parent->post_title : __( 'deleted post', 'wp-cleanup' ), (int) $row['post_parent'], $change['column'] );
 			} elseif ( $wpdb->posts === $change['table'] ) {
-				$where = sprintf( __( 'Post: %1$s (#%2$s), %3$s', 'wp-cleanup' ), wp_html_excerpt( (string) $row['post_title'], 100 ), $change['id'], $change['column'] );
+				$where = sprintf( /* translators: 1: post title, 2: post ID, 3: database column */ __( 'Post: %1$s (#%2$s), %3$s', 'wp-cleanup' ), wp_html_excerpt( (string) $row['post_title'], 100 ), $change['id'], $change['column'] );
 			} elseif ( $wpdb->options === $change['table'] ) {
-				$where = sprintf( __( 'Site option: %1$s (#%2$s)', 'wp-cleanup' ), $row['option_name'], $change['id'] );
+				$where = sprintf( /* translators: 1: option name, 2: option ID */ __( 'Site option: %1$s (#%2$s)', 'wp-cleanup' ), $row['option_name'], $change['id'] );
 			} elseif ( isset( $row['meta_key'] ) ) {
-				$where = sprintf( __( 'Metadata: %1$s (#%2$s in %3$s)', 'wp-cleanup' ), $row['meta_key'], $change['id'], $change['table'] );
+				$where = sprintf( /* translators: 1: meta key, 2: meta ID, 3: database table */ __( 'Metadata: %1$s (#%2$s in %3$s)', 'wp-cleanup' ), $row['meta_key'], $change['id'], $change['table'] );
 			} else {
 				$where = $change['table'] . ' #' . $change['id'] . ' · ' . $change['column'];
 			}
@@ -734,7 +734,7 @@ final class Media_Converter {
 		if ( ! apply_filters( 'wp_cleanup_media_verify', $verified, $file, $mime ) ) {
 			/* translators: 1: MIME type, 2: file, 3: expected width, 4: expected height, 5: observed format and dimensions */
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-			throw new \RuntimeException( sprintf( __( 'The new %1$s file %2$s could not be decoded with the expected dimensions (%3$d×%4$d expected; %5$s).', 'wp-cleanup' ), $mime, wp_basename( $file['path'] ), (int) $file['width'], (int) $file['height'], $observed ) );
+			throw new \RuntimeException( sprintf( /* translators: 1: MIME type, 2: file name, 3: expected width, 4: expected height, 5: what was decoded */ __( 'The new %1$s file %2$s could not be decoded with the expected dimensions (%3$d×%4$d expected; %5$s).', 'wp-cleanup' ), $mime, wp_basename( $file['path'] ), (int) $file['width'], (int) $file['height'], $observed ) );
 		}
 	}
 
@@ -864,7 +864,7 @@ final class Media_Converter {
 			if ( null !== $now && md5( $now ) !== $hash ) {
 				/* translators: 1: table, 2: row id */
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( sprintf( __( 'Row %2$s in %1$s was edited after the cleanup; not restoring this image.', 'wp-cleanup' ), $table, $row_id ) );
+				throw new \RuntimeException( sprintf( /* translators: 1: database table, 2: row ID */ __( 'Row %2$s in %1$s was edited after the cleanup; not restoring this image.', 'wp-cleanup' ), $table, $row_id ) );
 			}
 		}
 		$moved   = (array) ( isset( $extra['moved'] ) ? $extra['moved'] : array() );
@@ -884,12 +884,12 @@ final class Media_Converter {
 			if ( file_exists( $uploads . '/' . $rel ) && ! in_array( $rel, $created, true ) ) {
 				/* translators: %s: file */
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( sprintf( __( '%s exists again; not overwriting it.', 'wp-cleanup' ), $rel ) );
+				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( '%s exists again; not overwriting it.', 'wp-cleanup' ), $rel ) );
 			}
 			if ( ! is_file( $qdir . '/' . $rel ) ) {
 				/* translators: %s: file */
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( sprintf( __( '%s is missing from the backup set.', 'wp-cleanup' ), $rel ) );
+				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( '%s is missing from the backup set.', 'wp-cleanup' ), $rel ) );
 			}
 		}
 
@@ -901,7 +901,7 @@ final class Media_Converter {
 			if ( ! @rename( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore
 				/* translators: %s: file */
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text message; admin notices/lists use esc_html, AJAX uses textContent, WP-CLI prints text.
-				throw new \RuntimeException( sprintf( __( 'Could not move %s back.', 'wp-cleanup' ), $rel ) );
+				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not move %s back.', 'wp-cleanup' ), $rel ) );
 			}
 		}
 		$backup->replay_sql( $n );
