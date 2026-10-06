@@ -539,6 +539,55 @@ delete_option( 'wpcut_object' );
 delete_option( Media_Policy::OPTION );
 
 WP_CLI::log( '' );
+
+/* Identical group workflow ------------------------------------------------ */
+$group_keep = wpcu_attach( 'wpcut-group-keeper.jpg', 480, 320, 'jpg' );
+$group_a = wpcu_attach( 'wpcut-group-copy-a.jpg', 480, 320, 'jpg' );
+$group_b = wpcu_attach( 'wpcut-group-copy-b.jpg', 480, 320, 'jpg' );
+$group_different = wpcu_attach( 'wpcut-group-different.png', 480, 320, 'png' );
+$group_original = '<img src="' . wp_get_attachment_url( $group_a ) . '"><img src="' . wp_get_attachment_url( $group_b ) . '">';
+$group_post = wp_insert_post( wp_slash( array( 'post_title' => 'Identical group fixture', 'post_status' => 'publish', 'post_content' => $group_original ) ) );
+update_post_meta( $group_post, '_wpcu_test', 1 );
+$group_backup = Backup::start();
+wpcu_ok( \WPCleanup\Media_Merger::identical_files( $group_a, $group_keep ) && ! \WPCleanup\Media_Merger::identical_files( $group_different, $group_keep ), 'exact duplicate verification rejects re-encoded look-alikes' );
+try {
+	\WPCleanup\Media_Merger::merge( $group_different, $group_keep, $group_backup, true );
+	wpcu_ok( false, 'non-identical group merge must refuse the copy' );
+} catch ( \Exception $e ) {
+	wpcu_ok( get_post( $group_different ) && $group_original === get_post_field( 'post_content', $group_post, 'raw' ), 'non-identical merge leaves the copy and references untouched' );
+}
+try {
+	\WPCleanup\Media_Merger::merge( $group_a, $group_keep, $group_backup, true );
+	\WPCleanup\Media_Merger::merge( $group_b, $group_keep, Backup::open( $group_backup->id ), true );
+	wpcu_ok( get_post( $group_keep ) && ! get_post( $group_a ) && ! get_post( $group_b ), 'whole identical group keeps chosen image and backs up every other copy' );
+	wpcu_ok( 4 === count( Backup::open( $group_backup->id )->manifest['items'] ), 'group copies and references share one backup set across requests' );
+	$group_restored = Backup::open( $group_backup->id )->restore();
+	wpcu_ok( ! array_filter( $group_restored, static function ( $x ) { return ! $x['ok']; } ) && get_post( $group_a ) && get_post( $group_b ) && $group_original === get_post_field( 'post_content', $group_post, 'raw' ), 'group backup restores all copies and shared post references in reverse order' );
+} catch ( \Exception $e ) {
+	wpcu_ok( false, 'identical group merge: ' . $e->getMessage() );
+}
+wp_update_post( array( 'ID' => $group_post, 'post_content' => '' ) );
+$auto_backup = Backup::start();
+$auto_all_unused = \WPCleanup\Media_Remover::remove_duplicate( $group_a, $group_keep, $auto_backup );
+wpcu_ok( 'refused' === $auto_all_unused['status'] && get_post( $group_a ) && get_post( $group_keep ), 'automatic duplicate cleanup preserves wholly unused groups' );
+set_post_thumbnail( $group_post, $group_keep );
+$auto_different = \WPCleanup\Media_Remover::remove_duplicate( $group_different, $group_keep, $auto_backup );
+wpcu_ok( 'refused' === $auto_different['status'] && get_post( $group_different ), 'automatic duplicate cleanup preserves non-identical copies' );
+$auto_moved = \WPCleanup\Media_Remover::remove_duplicate( $group_a, $group_keep, $auto_backup );
+wpcu_ok( 'deleted' === $auto_moved['status'] && ! get_post( $group_a ) && get_post( $group_keep ), 'automatic duplicate cleanup moves an unused exact copy with a used keeper' );
+delete_post_thumbnail( $group_post );
+$auto_stale = \WPCleanup\Media_Remover::remove_duplicate( $group_b, $group_keep, $auto_backup );
+wpcu_ok( 'refused' === $auto_stale['status'] && get_post( $group_b ), 'fresh check preserves a copy when keeper became unused after selection' );
+Backup::open( $auto_backup->id )->restore();
+set_post_thumbnail( $group_post, $group_keep );
+update_post_meta( $group_post, 'hero_image', $group_a );
+$auto_used = \WPCleanup\Media_Remover::remove_duplicate( $group_a, $group_keep, Backup::start() );
+wpcu_ok( 'refused' === $auto_used['status'] && get_post( $group_a ), 'automatic duplicate cleanup refuses a copy that became used' );
+delete_post_meta( $group_post, 'hero_image' );
+delete_post_thumbnail( $group_post );
+foreach ( array( $group_keep, $group_a, $group_b, $group_different ) as $id ) { wp_delete_attachment( $id, true ); }
+wp_delete_post( $group_post, true );
+
 if ( $GLOBALS['wpcu_f'] ) {
 	WP_CLI::error( sprintf( '%d failed, %d passed.', $GLOBALS['wpcu_f'], $GLOBALS['wpcu_p'] ) );
 }

@@ -10,7 +10,7 @@ defined( 'ABSPATH' ) || exit;
 
 final class Media_Merger {
 	/** Replace one attachment with another after a fresh similarity and usage check. */
-	public static function merge( $drop, $keep, Backup $backup ) {
+	public static function merge( $drop, $keep, Backup $backup, $identical = false ) {
 		global $wpdb;
 		$drop = (int) $drop;
 		$keep = (int) $keep;
@@ -19,6 +19,9 @@ final class Media_Merger {
 		}
 		if ( Media_Policy::skip_reason( $drop ) || Media_Policy::skip_reason( $keep ) ) {
 			throw new \RuntimeException( __( 'One image cannot be managed by this tool.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+		}
+		if ( $identical && ! self::identical_files( $drop, $keep ) ) {
+			throw new \RuntimeException( __( 'These image files are no longer identical. No copy was removed.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the admin UI.
 		}
 		$hash = Media_Similarity::hash_all( array( $drop, $keep ), 30.0 );
 		if ( ! isset( $hash['hashes'][ $drop ], $hash['hashes'][ $keep ] ) || ! Media_Similarity::alike( $hash['hashes'][ $drop ], $hash['hashes'][ $keep ], $hash['colors'][ $drop ], $hash['colors'][ $keep ], $hash['ratios'][ $drop ], $hash['ratios'][ $keep ] ) ) {
@@ -132,6 +135,17 @@ final class Media_Merger {
 			$backup->set_result( $n, 'failed', $e->getMessage() );
 			throw $e;
 		}
+	}
+
+	/** Verify identical main files from disk, without relying on the cached report. */
+	public static function identical_files( $drop, $keep ) {
+		$a = get_attached_file( (int) $drop, true );
+		$b = get_attached_file( (int) $keep, true );
+		if ( ! $a || ! $b || ! is_file( $a ) || ! is_file( $b ) ) {
+			return false;
+		}
+		$hash = hash_file( 'sha256', $a );
+		return $hash && hash_equals( $hash, (string) hash_file( 'sha256', $b ) );
 	}
 
 	private static function check_db() {

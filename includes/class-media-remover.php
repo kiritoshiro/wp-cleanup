@@ -10,6 +10,17 @@ namespace WPCleanup;
 defined( 'ABSPATH' ) || exit;
 
 final class Media_Remover {
+	/** Back up an unused identical copy only while its chosen keeper is still used. */
+	public static function remove_duplicate( $id, $keep, Backup $backup ) {
+		$id = (int) $id;
+		$keep = (int) $keep;
+		$usage = Media_Usage::build(); // An incomplete scan throws; nothing is removed.
+		if ( ! $keep || $keep === $id || empty( $usage['counts'][ $keep ] ) || Media_Policy::skip_reason( $keep ) || ! Media_Merger::identical_files( $id, $keep ) ) {
+			return array( 'id' => $id, 'status' => 'refused', 'message' => __( 'An identical keeper must still be used. This copy was left untouched.', 'wp-cleanup' ) );
+		}
+		return self::remove( $id, $backup, $usage );
+	}
+
 	/**
 	 * Remove one attachment only after a fresh usage check.
 	 *

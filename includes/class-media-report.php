@@ -335,14 +335,14 @@ final class Media_Report {
 			return;
 		}
 		$drop = array_fill_keys( array_map( 'intval', $ids ), true );
-		foreach ( array( 'items', 'unused' ) as $key ) {
+		foreach ( array( 'items', 'small_items', 'unused' ) as $key ) {
 			if ( ! isset( $report[ $key ] ) ) {
 				continue;
 			}
 			$report[ $key ] = array_values( array_filter(
 				$report[ $key ],
 				static function ( $row ) use ( $key, $drop ) {
-					$id = 'items' === $key ? (int) $row['id'] : (int) $row;
+					$id = 'unused' === $key ? (int) $row : (int) $row['id'];
 					return ! isset( $drop[ $id ] );
 				}
 			) );
