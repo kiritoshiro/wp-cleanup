@@ -606,6 +606,7 @@ final class Admin {
 				'small_max'  => isset( $_POST['small_max'] ) ? absint( $_POST['small_max'] ) : 0,
 				'jpeg_max'   => isset( $_POST['jpeg_max'] ) ? absint( $_POST['jpeg_max'] ) : 0,
 				'jpeg_quality' => isset( $_POST['jpeg_quality'] ) ? absint( $_POST['jpeg_quality'] ) : 0,
+				'avif_quality' => isset( $_POST['avif_quality'] ) ? absint( $_POST['avif_quality'] ) : 0,
 				'jpeg_fallback' => ! empty( $_POST['jpeg_fallback'] ),
 				'small_name' => isset( $_POST['small_name'] ) ? sanitize_key( wp_unslash( $_POST['small_name'] ) ) : '',
 				'set_flag'   => ! empty( $_POST['set_flag'] ),
@@ -996,6 +997,8 @@ final class Admin {
 		echo '<p><label><input type="checkbox" name="jpeg_fallback" value="1"' . checked( $s['jpeg_fallback'], true, false ) . '> ' . esc_html__( 'Keep one JPEG fallback beside the main AVIF for older devices', 'wp-cleanup' ) . '</label></p>';
 		echo '<p><label>' . esc_html__( 'JPEG fallback: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="jpeg_max" min="320" max="8192" value="' . esc_attr( $s['jpeg_max'] ) . '"> px</label> <label>' . esc_html__( 'quality', 'wp-cleanup' ) . ' <input type="number" name="jpeg_quality" min="40" max="95" value="' . esc_attr( $s['jpeg_quality'] ) . '"></label></p>';
 		echo '<p><label>' . esc_html__( 'Full image: longest side at most', 'wp-cleanup' ) . ' <input type="number" name="full_max" min="320" max="8192" value="' . esc_attr( $s['full_max'] ) . '"> px</label></p>';
+		echo '<p><label>' . esc_html__( 'AVIF quality', 'wp-cleanup' ) . ' <input type="number" name="avif_quality" min="20" max="95" value="' . esc_attr( $s['avif_quality'] ) . '"></label></p>';
+		echo '<p class="description">' . esc_html__( 'Lower values give smaller files. 82 is the WordPress default; around 60 photos usually look the same at about half the size. A new value also marks images converted with the old one for conversion again.', 'wp-cleanup' ) . '</p>';
 		echo '<p><label>' . esc_html__( 'Small image size name', 'wp-cleanup' ) . ' <input type="text" name="small_name" value="' . esc_attr( $s['small_name'] ) . '"></label> <label>' . esc_html__( 'longest side at most', 'wp-cleanup' ) . ' <input type="number" name="small_max" min="64" value="' . esc_attr( $s['small_max'] ) . '"> px</label></p>';
 		echo '<p><label><input type="checkbox" name="set_flag" value="1"' . checked( $s['set_flag'], true, false ) . '> ' . esc_html__( 'Mark converted images for the ALPS theme (_alps_two_size_upload)', 'wp-cleanup' ) . '</label></p>';
 		$alps = Media_Policy::alps_theme();

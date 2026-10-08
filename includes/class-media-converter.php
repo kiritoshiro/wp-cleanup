@@ -581,8 +581,17 @@ final class Media_Converter {
 		return array( $jpeg, true === $rotated );
 	}
 
-	/** Make a full AVIF and, when needed, one small AVIF. */
+	/** Make a full AVIF and, when needed, one small AVIF, at the policy's AVIF quality. */
 	private static function encode_avif( $id, array $inv, array $s, array &$created, &$editor_class, $gd_only = false, $gap = 0 ) {
+		return Media_Policy::with_avif_quality(
+			isset( $s['avif_quality'] ) ? $s['avif_quality'] : Media_Policy::DEFAULT_AVIF_QUALITY,
+			static function () use ( $id, $inv, $s, &$created, &$editor_class, $gd_only, $gap ) {
+				return self::encode_avif_files( $id, $inv, $s, $created, $editor_class, $gd_only, $gap );
+			}
+		);
+	}
+
+	private static function encode_avif_files( $id, array $inv, array $s, array &$created, &$editor_class, $gd_only, $gap ) {
 		$source = self::source( $id, $inv );
 		$editor = self::avif_editor( $source, $gd_only );
 		if ( is_wp_error( $editor ) ) {

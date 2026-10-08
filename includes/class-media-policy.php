@@ -26,7 +26,13 @@ final class Media_Policy {
 	const OUTPUT_META = '_wpcu_image_outputs';
 
 	/**
-	 * @return array{full_max:int,small_name:string,small_max:int,jpeg_max:int,jpeg_quality:int,jpeg_fallback:bool,set_flag:bool}
+	 * AVIF quality when none is saved: WordPress' own default (WP_Image_Editor
+	 * uses 82 for AVIF), so images converted before the setting existed match.
+	 */
+	const DEFAULT_AVIF_QUALITY = 82;
+
+	/**
+	 * @return array{full_max:int,small_name:string,small_max:int,jpeg_max:int,jpeg_quality:int,avif_quality:int,jpeg_fallback:bool,set_flag:bool}
 	 */
 	public static function settings() {
 		$saved = get_option( self::OPTION, array() );
@@ -44,6 +50,7 @@ final class Media_Policy {
 			'small_max'  => 768,
 			'jpeg_max'   => 1920,
 			'jpeg_quality' => 82,
+			'avif_quality' => self::DEFAULT_AVIF_QUALITY,
 			'jpeg_fallback' => true,
 			'set_flag'   => true,
 		);
@@ -52,6 +59,7 @@ final class Media_Policy {
 		$out['small_max']  = max( 64, min( $out['full_max'] - 1, (int) $out['small_max'] ) );
 		$out['jpeg_max'] = max( 320, min( 8192, (int) $out['jpeg_max'] ) );
 		$out['jpeg_quality'] = max( 40, min( 95, (int) $out['jpeg_quality'] ) );
+		$out['avif_quality'] = max( 20, min( 95, (int) $out['avif_quality'] ) );
 		$out['jpeg_fallback'] = (bool) $out['jpeg_fallback'];
 		$out['small_name'] = sanitize_key( $out['small_name'] );
 		if ( '' === $out['small_name'] || 'full' === $out['small_name'] ) {
@@ -117,7 +125,31 @@ final class Media_Policy {
 	 */
 	public static function encoding_policy( array $s ) {
 		unset( $s['set_flag'] );
+		// Policies recorded before AVIF quality was a setting used WordPress' default.
+		$s['avif_quality'] = isset( $s['avif_quality'] ) ? (int) $s['avif_quality'] : self::DEFAULT_AVIF_QUALITY;
 		return $s;
+	}
+
+	/**
+	 * Run $callback with WordPress' AVIF quality set to $quality. WordPress
+	 * resets the quality whenever an image is converted to another format,
+	 * so a set_quality() call before saving would be overwritten; the
+	 * wp_editor_set_quality filter is applied at that reset.
+	 *
+	 * @param int      $quality  AVIF quality.
+	 * @param callable $callback Work that creates AVIF files.
+	 * @return mixed The callback's result.
+	 */
+	public static function with_avif_quality( $quality, callable $callback ) {
+		$filter = static function ( $value, $mime_type = '' ) use ( $quality ) {
+			return 'image/avif' === $mime_type ? (int) $quality : $value;
+		};
+		add_filter( 'wp_editor_set_quality', $filter, 1000, 2 );
+		try {
+			return $callback();
+		} finally {
+			remove_filter( 'wp_editor_set_quality', $filter, 1000 );
+		}
 	}
 
 	/**
