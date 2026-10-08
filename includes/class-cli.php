@@ -329,7 +329,7 @@ final class CLI {
 		}
 		if ( 'status' === $args[0] ) {
 			$r = Media_Report::build_and_store();
-			\WP_CLI::log( sprintf( 'Policy: %s, AVIF full <= %dpx + "%s" <= %dpx%s. AVIF support: %s.', $s['jpeg_fallback'] ? sprintf( 'one JPEG <= %dpx (quality %d)', $s['jpeg_max'], $s['jpeg_quality'] ) : 'AVIF only', $s['full_max'], $s['small_name'], $s['small_max'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
+			\WP_CLI::log( sprintf( 'Policy: %s, AVIF full <= %dpx + "%s" <= %dpx (quality %d)%s. AVIF support: %s.', $s['jpeg_fallback'] ? sprintf( 'one JPEG <= %dpx (quality %d)', $s['jpeg_max'], $s['jpeg_quality'] ) : 'AVIF only', $s['full_max'], $s['small_name'], $s['small_max'], $s['avif_quality'], $s['set_flag'] ? ', ALPS flag on' : '', $r['avif'] ? 'yes' : 'NO' ) );
 			\WP_CLI::log( sprintf( '%d images: %d to convert (%d files, %s, incl. %d stray files %s), %d already compliant, %d skipped.', $r['total'], $r['eligible'], $r['files'], size_format( $r['bytes'], 1 ), $r['strays'], size_format( $r['stray_b'], 1 ), $r['compliant'], $r['skipped'] ) );
 			if ( isset( $r['file_catalog'] ) ) {
 				$c = $r['file_catalog'];
