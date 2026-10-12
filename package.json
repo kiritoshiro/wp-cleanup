@@ -1,0 +1,13 @@
+{
+  "name": "wp-cleanup-build",
+  "private": true,
+  "description": "Build tooling only (writes the minified admin script and styles). Nothing here ships in the plugin.",
+  "scripts": {
+    "minify": "node scripts/minify-assets.mjs",
+    "minify:check": "node scripts/minify-assets.mjs --check"
+  },
+  "devDependencies": {
+    "@swc/core": "1.16.18",
+    "lightningcss": "1.27.0"
+  }
+}

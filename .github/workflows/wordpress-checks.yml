@@ -62,3 +62,11 @@ jobs:
         env:
           PHP_VERSION: ${{ matrix.php }}
         run: python3 .github/playground/smoke.py --php "$PHP_VERSION"
+      # The admin page loads assets/admin.min.{js,css}; fail when a committed
+      # copy no longer matches its source. Once per run, after the smoke test,
+      # so node_modules is not inside the mounted plugin while it runs.
+      - name: Minified assets are up to date
+        if: ${{ !cancelled() && matrix.php == '8.4' }}
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/minify-assets.mjs --check

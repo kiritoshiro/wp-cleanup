@@ -1,0 +1,6 @@
+# Build tooling stays out of release ZIPs (git archive honours export-ignore).
+# The minified assets/*.min.* copies it writes are committed and do ship.
+/package.json export-ignore
+/package-lock.json export-ignore
+/scripts export-ignore
+/.gitattributes export-ignore
