@@ -187,6 +187,14 @@ wp cleanup delete-backup <backup-id> --yes
 
 Requirements: PHP 7.4+ and WordPress 6.0+. Tested on PHP 8.3 with WordPress 7.1.2 and MySQL 8.4.
 
+The admin page loads `assets/admin.min.js` and `assets/admin.min.css`, or the readable `admin.js` and `admin.css` when `SCRIPT_DEBUG` is on or a minified copy is missing. After editing a source, rebuild the copies with Node.js 24 and commit them; CI fails when a committed copy is out of date. `package.json`, `package-lock.json` and `scripts/` are left out of release ZIPs (`.gitattributes`).
+
+```bash
+npm ci --ignore-scripts
+node scripts/minify-assets.mjs           # rebuild
+node scripts/minify-assets.mjs --check   # what CI runs
+```
+
 The integration suite is **destructive** and refuses to run unless `WPCU_TESTS=1` is set and the site URL is local (`localhost`, `127.0.0.1` or `*.test`):
 
 ```bash

@@ -46,9 +46,24 @@ final class Admin {
 		add_action( 'admin_print_styles-' . $hook, array( $this, 'assets' ) );
 	}
 
+	/**
+	 * URL of an admin asset: the minified copy built by scripts/minify-assets.mjs,
+	 * or the readable source under SCRIPT_DEBUG or when the copy is missing.
+	 *
+	 * @param string $file Source path relative to the plugin, e.g. assets/admin.js.
+	 * @return string
+	 */
+	private static function asset_url( $file ) {
+		$min = preg_replace( '/\.(js|css)$/', '.min.$1', $file );
+		if ( ! ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) && is_readable( WPCU_DIR . $min ) ) {
+			$file = $min;
+		}
+		return WPCU_URL . $file;
+	}
+
 	public function assets() {
-		wp_enqueue_style( 'wp-cleanup', WPCU_URL . 'assets/admin.css', array(), WPCU_VERSION );
-		wp_enqueue_script( 'wp-cleanup', WPCU_URL . 'assets/admin.js', array(), WPCU_VERSION, true );
+		wp_enqueue_style( 'wp-cleanup', self::asset_url( 'assets/admin.css' ), array(), WPCU_VERSION );
+		wp_enqueue_script( 'wp-cleanup', self::asset_url( 'assets/admin.js' ), array(), WPCU_VERSION, true );
 		wp_localize_script(
 			'wp-cleanup',
 			'wpCleanup',
