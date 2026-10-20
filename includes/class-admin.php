@@ -19,6 +19,7 @@ final class Admin {
 		add_action( 'admin_post_wpcu_scan', array( $this, 'handle_scan' ) );
 		add_action( 'admin_post_wpcu_clean', array( $this, 'handle_clean' ) );
 		add_action( 'admin_post_wpcu_restore', array( $this, 'handle_restore' ) );
+		add_action( 'admin_post_wpcu_restore_files', array( $this, 'handle_restore_files' ) );
 		add_action( 'admin_post_wpcu_backup_download', array( $this, 'handle_backup_download' ) );
 		add_action( 'admin_post_wpcu_delete_backup', array( $this, 'handle_delete_backup' ) );
 		add_action( 'admin_post_wpcu_media_settings', array( $this, 'handle_media_settings' ) );
@@ -278,6 +279,48 @@ final class Admin {
 			sprintf( __( 'Restored %1$d item(s), %2$d failed.', 'wp-cleanup' ), count( $report ) - count( $failed ), count( $failed ) ),
 			$details
 		);
+		$this->back( array( 'tab' => 'backups' ) );
+	}
+
+	/** Copy back missing files another image still uses, without touching the database. */
+	public function handle_restore_files() {
+		$this->guard();
+		check_admin_referer( 'wpcu_restore_files' );
+		$backup   = Backup::open( isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '' );
+		$raw_item = isset( $_POST['item'] ) && is_scalar( $_POST['item'] ) ? sanitize_text_field( wp_unslash( $_POST['item'] ) ) : '';
+		if ( ! $backup || ! ctype_digit( (string) $raw_item ) || ! isset( $backup->manifest['items'][ (int) $raw_item ] ) ) {
+			$this->notice( 'error', __( 'Backup item not found.', 'wp-cleanup' ) );
+			$this->back( array( 'tab' => 'backups' ) );
+		}
+		try {
+			$result  = $backup->restore_missing_files( (int) $raw_item );
+			$copied  = $result['copied'];
+			$details = $copied;
+			foreach ( $result['refused'] as $rel ) {
+				/* translators: %s: file path */
+				$details[] = sprintf( __( 'Not copied, the folder is a link or outside uploads: %s', 'wp-cleanup' ), $rel );
+			}
+			foreach ( $result['stranded'] as $rel ) {
+				/* translators: %s: file path */
+				$details[] = sprintf( __( 'Not restored: the copy failed or its folder changed during the copy. An empty file may be left for %s; check that folder and remove it manually.', 'wp-cleanup' ), $rel );
+			}
+			$problems = count( $result['refused'] ) + count( $result['stranded'] );
+			if ( $copied || $problems ) {
+				/* translators: 1: copied files, 2: refused or stranded files */
+				$this->notice( $problems ? 'warning' : 'success', sprintf( __( '%1$d missing file(s) another image still uses were copied back, %2$d not restored. No database rows changed.', 'wp-cleanup' ), count( $copied ), $problems ), $details );
+				try {
+					if ( Media_Report::last() ) {
+						Media_Report::build_and_store();
+					}
+				} catch ( \Exception $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement
+					// The files are back; a stale image list is acceptable.
+				}
+			} else {
+				$this->notice( 'info', __( 'No file from this item is both missing and still used by another image. Nothing was copied.', 'wp-cleanup' ) );
+			}
+		} catch ( \Exception $e ) {
+			$this->notice( 'error', $e->getMessage() );
+		}
 		$this->back( array( 'tab' => 'backups' ) );
 	}
 
@@ -1677,6 +1720,13 @@ final class Admin {
 					echo '<input type="hidden" name="action" value="wpcu_restore"><input type="hidden" name="backup" value="' . esc_attr( $b['id'] ) . '"><input type="hidden" name="item" value="' . (int) $n . '">';
 					submit_button( 'media' === $i['type'] || 'media_repair' === $i['type'] || 'media_delete' === $i['type'] || 'media_merge_rewrite' === $i['type'] ? __( 'Restore this image only', 'wp-cleanup' ) : __( 'Restore this item only', 'wp-cleanup' ), 'secondary', 'submit', false );
 					echo '</form>';
+					if ( ! empty( $extra['moved'] ) && in_array( $i['type'], array( 'media', 'media_delete' ), true ) ) {
+						echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="wpcu-inline-form">';
+						wp_nonce_field( 'wpcu_restore_files' );
+						echo '<input type="hidden" name="action" value="wpcu_restore_files"><input type="hidden" name="backup" value="' . esc_attr( $b['id'] ) . '"><input type="hidden" name="item" value="' . (int) $n . '">';
+						submit_button( __( 'Restore missing files only', 'wp-cleanup' ), 'secondary', 'submit', false, array( 'title' => __( 'Copies back files that are missing but another image still uses. The database is not changed.', 'wp-cleanup' ) ) );
+						echo '</form>';
+					}
 				}
 				echo '</li>';
 			}

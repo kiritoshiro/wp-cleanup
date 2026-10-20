@@ -237,6 +237,7 @@ final class Media_Merger {
 
 	private static function rollback( array $changes ) {
 		global $wpdb;
+		Media_Owners::reset();
 		foreach ( array_reverse( $changes ) as $c ) {
 			$wpdb->query( $wpdb->prepare( "UPDATE {$c['table']} SET {$c['column']} = %s WHERE {$c['pk']} = %s AND {$c['column']} = %s", $c['old'], $c['id'], $c['new'] ) ); // phpcs:ignore -- Table and column identifiers come from fixed wpdb target lists or a validated backup manifest.
 		}

@@ -162,6 +162,7 @@ final class Reference_Rewriter {
 	 */
 	public static function apply( array $changes ) {
 		global $wpdb;
+		Media_Owners::reset(); // Raw SQL may rewrite attachment metadata.
 		$done = 0;
 		foreach ( $changes as $c ) {
 			$updated = $wpdb->query(
