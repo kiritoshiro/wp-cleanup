@@ -321,7 +321,9 @@ add_action( 'wp_cleanup_restore_file_before_open', $swap, 10, 2 );
 $raced = Backup::open( $backup->id )->restore_missing_files( 0 );
 remove_action( 'wp_cleanup_restore_file_before_open', $swap, 10 );
 if ( $swapped ) {
-	wpcs_ok( in_array( $race_rel, $raced['refused'], true ) && ! in_array( $race_rel, $raced['copied'], true ) && ! file_exists( $outside . '/wpcs-race.png' ), 'a parent folder swapped for a link after the check is detected; nothing is left outside uploads' );
+	$left = $outside . '/wpcs-race.png';
+	wpcs_ok( in_array( $race_rel, $raced['stranded'], true ) && ! in_array( $race_rel, $raced['copied'], true ) && is_file( $left ) && 0 === filesize( $left ), 'a parent folder swapped for a link before writing is detected: no data written, the empty file is reported as stranded, nothing unlinked' );
+	@unlink( $left ); // phpcs:ignore -- Test cleanup.
 } else {
 	WP_CLI::log( '  skip the parent-swap check: no link could be made here' );
 }
@@ -333,6 +335,60 @@ if ( is_dir( $race_moved ) ) {
 }
 $q = Backup::open( $backup->id );
 $q->set_extra( 0, 'moved', array_values( array_diff( (array) $q->manifest['items'][0]['extra']['moved'], array( $race_rel ) ) ) );
+
+// A failed copy, and a folder swapped during the copy, never delete by pathname.
+$late_rel   = 'wpcs-late/wpcs-late.png';
+$late_dir   = $uploads_root . '/wpcs-late';
+$late_moved = $uploads_root . '/wpcs-late-moved';
+$late_owner = wp_insert_attachment( array( 'post_mime_type' => 'image/png', 'post_title' => 'late', 'post_status' => 'inherit' ) );
+update_post_meta( $late_owner, '_wpcs_test', 1 );
+update_post_meta( $late_owner, '_wp_attached_file', $late_rel );
+wp_mkdir_p( $qorig . '/wpcs-late' );
+file_put_contents( $qorig . '/' . $late_rel, 'backup copy' );
+$late_run = static function ( $copy, $swap ) use ( $backup, $late_rel, $late_dir, $late_moved ) {
+	$q = Backup::open( $backup->id );
+	$q->set_extra( 0, 'moved', array_merge( array_diff( (array) $q->manifest['items'][0]['extra']['moved'], array( $late_rel ) ), array( $late_rel ) ) );
+	$did  = null;
+	$seam = static function ( $ok, $rel ) use ( $copy, $swap, $late_rel, $late_dir, $late_moved, &$did ) {
+		if ( $late_rel !== $rel ) {
+			return $ok;
+		}
+		if ( $swap ) {
+			// Someone else's file now sits at the path our file was created at.
+			$did = @rename( $late_dir, $late_moved ) && wp_mkdir_p( $late_dir ) && false !== file_put_contents( $late_dir . '/wpcs-late.png', 'pre-existing' ); // phpcs:ignore
+		}
+		return $copy;
+	};
+	add_filter( 'wp_cleanup_restore_file_copy', $seam, 10, 2 );
+	$result = Backup::open( $backup->id )->restore_missing_files( 0 );
+	remove_filter( 'wp_cleanup_restore_file_copy', $seam, 10 );
+	return array( $result, $did );
+};
+$late_clean = static function () use ( $late_dir, $late_moved ) {
+	foreach ( array( $late_dir, $late_moved ) as $d ) {
+		foreach ( (array) glob( $d . '/*' ) as $f ) {
+			@unlink( $f ); // phpcs:ignore -- Test cleanup.
+		}
+		@rmdir( $d ); // phpcs:ignore
+	}
+};
+list( $plain_fail ) = $late_run( false, false );
+wpcs_ok( array( $late_rel ) === $plain_fail['stranded'] && ! in_array( $late_rel, $plain_fail['copied'], true ) && 0 === filesize( $late_dir . '/wpcs-late.png' ), 'a failed copy is reported as stranded and only our own file is emptied, through its handle' );
+$item = Backup::open( $backup->id )->manifest['items'][0];
+wpcs_ok( in_array( $late_rel, (array) ( isset( $item['extra']['files_stranded'] ) ? $item['extra']['files_stranded'] : array() ), true ) && ! in_array( $late_rel, (array) $item['extra']['files_restored'], true ), 'the manifest records it as stranded, not restored' );
+$late_clean();
+list( $fail_swap, $did ) = $late_run( false, true );
+if ( $did ) {
+	wpcs_ok( 'pre-existing' === file_get_contents( $late_dir . '/wpcs-late.png' ) && 0 === filesize( $late_moved . '/wpcs-late.png' ) && in_array( $late_rel, $fail_swap['stranded'], true ), 'a failed copy after a folder swap leaves the pre-existing file untouched and empties only our own' );
+	$late_clean();
+	list( $copy_swap ) = $late_run( true, true );
+	wpcs_ok( 'pre-existing' === file_get_contents( $late_dir . '/wpcs-late.png' ) && in_array( $late_rel, $copy_swap['stranded'], true ) && ! in_array( $late_rel, $copy_swap['copied'], true ) && 0 === filesize( $late_moved . '/wpcs-late.png' ), 'a folder swapped during a successful copy is not reported as restored; the pre-existing file is untouched' );
+} else {
+	WP_CLI::log( '  skip the swap-during-copy checks: this system cannot rename a folder holding an open file' );
+}
+$late_clean();
+$q = Backup::open( $backup->id );
+$q->set_extra( 0, 'moved', array_values( array_diff( (array) $q->manifest['items'][0]['extra']['moved'], array( $late_rel ) ) ) );
 
 if ( is_dir( $link ) || file_exists( $link ) ) {
 	'\\' === DIRECTORY_SEPARATOR ? exec( 'rmdir ' . escapeshellarg( str_replace( '/', '\\', $link ) ) ) : @unlink( $link ); // phpcs:ignore

@@ -300,9 +300,14 @@ final class Admin {
 				/* translators: %s: file path */
 				$details[] = sprintf( __( 'Not copied, the folder is a link or outside uploads: %s', 'wp-cleanup' ), $rel );
 			}
-			if ( $copied || $result['refused'] ) {
-				/* translators: 1: copied files, 2: refused files */
-				$this->notice( $result['refused'] ? 'warning' : 'success', sprintf( __( '%1$d missing file(s) another image still uses were copied back, %2$d refused. No database rows changed.', 'wp-cleanup' ), count( $copied ), count( $result['refused'] ) ), $details );
+			foreach ( $result['stranded'] as $rel ) {
+				/* translators: %s: file path */
+				$details[] = sprintf( __( 'Not restored: the copy failed or its folder changed during the copy. An empty file may be left for %s; check that folder and remove it manually.', 'wp-cleanup' ), $rel );
+			}
+			$problems = count( $result['refused'] ) + count( $result['stranded'] );
+			if ( $copied || $problems ) {
+				/* translators: 1: copied files, 2: refused or stranded files */
+				$this->notice( $problems ? 'warning' : 'success', sprintf( __( '%1$d missing file(s) another image still uses were copied back, %2$d not restored. No database rows changed.', 'wp-cleanup' ), count( $copied ), $problems ), $details );
 				try {
 					if ( Media_Report::last() ) {
 						Media_Report::build_and_store();

@@ -349,7 +349,7 @@ final class Backup {
 	 * this works where a full restore is refused because a row was edited later.
 	 *
 	 * @param int $n Section of a converted or removed image.
-	 * @return array{copied:string[],refused:string[]} Paths copied back, and shared paths whose folder is not a plain folder inside uploads.
+	 * @return array{copied:string[],refused:string[],stranded:string[]} Paths copied back; shared paths whose folder is not a plain folder inside uploads; and paths where an emptied file may be left after a failed copy or a folder change (remove manually).
 	 * @throws \RuntimeException When a file cannot be copied.
 	 */
 	public function restore_missing_files( $n ) {
@@ -358,12 +358,12 @@ final class Backup {
 		}
 		$item = $this->manifest['items'][ $n ];
 		if ( ! in_array( $item['type'], array( 'media', 'media_delete' ), true ) || 'deleted' !== $item['result'] || ! empty( $item['restored'] ) ) {
-			return array( 'copied' => array(), 'refused' => array() );
+			return array( 'copied' => array(), 'refused' => array(), 'stranded' => array() );
 		}
 		$root = realpath( wp_upload_dir( null, false )['basedir'] );
 		$from = realpath( $this->dir . '/files/' . $n . '/orig' );
 		if ( ! $root || ! $from ) {
-			return array( 'copied' => array(), 'refused' => array() );
+			return array( 'copied' => array(), 'refused' => array(), 'stranded' => array() );
 		}
 		$root    = untrailingslashit( wp_normalize_path( $root ) );
 		$from    = untrailingslashit( wp_normalize_path( $from ) );
@@ -378,8 +378,9 @@ final class Backup {
 				$missing[ $rel ] = $source;
 			}
 		}
-		$copied  = array();
-		$refused = array();
+		$copied   = array();
+		$refused  = array();
+		$stranded = array();
 		foreach ( $missing ? Media_Owners::shared( 0, array_keys( $missing ) ) : array() as $rel ) {
 			$folder = self::safe_folder( $root, dirname( $rel ) );
 			if ( null === $folder ) {
@@ -401,33 +402,44 @@ final class Backup {
 				}
 				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
 			}
-			// A parent folder could have been swapped for a link after the check. Before
-			// writing anything, the new file must be the one at the checked canonical path.
-			$made = fstat( $out );
-			clearstatcache( true, $target );
-			$here = @stat( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Checked below.
-			$real = realpath( $target );
-			$same = $made && $here && $made['dev'] === $here['dev'] && $made['ino'] === $here['ino'];
-			if ( ! $same || ! $real || wp_normalize_path( $real ) !== $target ) {
-				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
-				if ( $same ) {
-					@unlink( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Still reachable and provably our own empty file.
-				}
-				// Otherwise the empty file we made is no longer reachable by this path; nothing
-				// was written to it and nothing was overwritten. Remaining limit: a swap and
-				// swap-back around the open can leave that empty file where the link pointed.
-				$refused[] = $rel;
+			/*
+			 * From here on the only file this code ever touches is the one behind $out.
+			 *
+			 * PHP has no openat()/dirfd, so someone with local write access to uploads can
+			 * still replace a parent folder between any check and any later use of the
+			 * pathname. The identity checks below (handle vs. path: same device and inode,
+			 * unchanged realpath, before writing and again after copying) catch a swap at
+			 * those points, but cannot exclude one at every instant. Therefore nothing is
+			 * ever unlinked by pathname: cleanup empties our own file through its handle and
+			 * reports it as stranded. The worst remaining effect of such a race is a
+			 * misplaced or stranded (empty) file, never deletion of an existing one.
+			 */
+			if ( ! self::is_at( $out, $target ) ) {
+				self::strand( $out );
+				$stranded[] = $rel;
 				continue;
 			}
-			$in = @fopen( $missing[ $rel ], 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Backup copy.
-			$ok = $in && false !== stream_copy_to_stream( $in, $out );
+			/**
+			 * Test seam: return false to simulate a failed copy.
+			 *
+			 * @param bool   $ok  Whether to copy.
+			 * @param string $rel Uploads-relative path.
+			 */
+			$ok = apply_filters( 'wp_cleanup_restore_file_copy', true, $rel );
+			$in = $ok ? @fopen( $missing[ $rel ], 'rb' ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Backup copy.
+			$ok = $in && false !== stream_copy_to_stream( $in, $out ) && fflush( $out );
 			if ( $in ) {
 				fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 			}
-			$ok = fclose( $out ) && $ok; // phpcs:ignore WordPress.WP.AlternativeFunctions
-			if ( ! $ok ) {
-				@unlink( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Our own partial file.
-				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+			// A failed copy, or a path that no longer leads to our file, is never reported as restored.
+			if ( ! $ok || ! self::is_at( $out, $target ) ) {
+				self::strand( $out );
+				$stranded[] = $rel;
+				continue;
+			}
+			if ( ! fclose( $out ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
+				$stranded[] = $rel;
+				continue;
 			}
 			$copied[] = $rel;
 		}
@@ -436,7 +448,35 @@ final class Backup {
 			$this->set_extra( $n, 'files_restored', array_values( array_unique( array_merge( $before, $copied ) ) ) );
 			Media_Inventory::flush();
 		}
-		return array( 'copied' => $copied, 'refused' => $refused );
+		if ( $stranded ) {
+			$before = isset( $item['extra']['files_stranded'] ) ? (array) $item['extra']['files_stranded'] : array();
+			$this->set_extra( $n, 'files_stranded', array_values( array_unique( array_merge( $before, $stranded ) ) ) );
+		}
+		return array( 'copied' => $copied, 'refused' => $refused, 'stranded' => $stranded );
+	}
+
+	/**
+	 * Whether the open handle is the file this canonical path names right now.
+	 *
+	 * @param resource $handle Open file.
+	 * @param string   $path   Canonical path it was created at.
+	 */
+	private static function is_at( $handle, $path ) {
+		$made = fstat( $handle );
+		clearstatcache( true, $path );
+		$here = @stat( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Checked below.
+		$real = realpath( $path );
+		return $made && $here && $made['dev'] === $here['dev'] && $made['ino'] === $here['ino'] && $real && wp_normalize_path( $real ) === $path;
+	}
+
+	/**
+	 * Empty our own file through its handle and close it; never by pathname.
+	 *
+	 * @param resource $handle Open file this code created.
+	 */
+	private static function strand( $handle ) {
+		ftruncate( $handle, 0 );
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 	}
 
 	/**
