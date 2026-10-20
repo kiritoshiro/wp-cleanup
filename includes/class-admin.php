@@ -293,10 +293,16 @@ final class Admin {
 			$this->back( array( 'tab' => 'backups' ) );
 		}
 		try {
-			$copied = $backup->restore_missing_files( (int) $raw_item );
-			if ( $copied ) {
-				/* translators: %d: number of files */
-				$this->notice( 'success', sprintf( __( '%d missing file(s) another image still uses were copied back. No database rows changed.', 'wp-cleanup' ), count( $copied ) ), $copied );
+			$result  = $backup->restore_missing_files( (int) $raw_item );
+			$copied  = $result['copied'];
+			$details = $copied;
+			foreach ( $result['refused'] as $rel ) {
+				/* translators: %s: file path */
+				$details[] = sprintf( __( 'Not copied, the folder is a link or outside uploads: %s', 'wp-cleanup' ), $rel );
+			}
+			if ( $copied || $result['refused'] ) {
+				/* translators: 1: copied files, 2: refused files */
+				$this->notice( $result['refused'] ? 'warning' : 'success', sprintf( __( '%1$d missing file(s) another image still uses were copied back, %2$d refused. No database rows changed.', 'wp-cleanup' ), count( $copied ), count( $result['refused'] ) ), $details );
 				try {
 					if ( Media_Report::last() ) {
 						Media_Report::build_and_store();

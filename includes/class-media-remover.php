@@ -68,7 +68,7 @@ final class Media_Remover {
 		}
 		// Files another attachment still names stay where they are; only this row lets go of them.
 		try {
-			$shared = Media_Inventory::shared_paths( $id, $paths );
+			$shared = Media_Owners::shared( $id, $paths );
 		} catch ( \Exception $e ) {
 			$result['message'] = $e->getMessage();
 			return $result;

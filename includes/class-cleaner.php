@@ -283,6 +283,7 @@ final class Cleaner {
 				$wpdb->query( "DELETE FROM {$wpdb->comments} WHERE comment_ID IN ($c_in)" ); // phpcs:ignore
 			}
 			$wpdb->query( "DELETE FROM {$wpdb->term_relationships} WHERE object_id IN ($all)" ); // phpcs:ignore
+			Media_Owners::reset();
 			$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN ($all)" ); // phpcs:ignore
 			$deleted = $wpdb->query( "DELETE FROM {$wpdb->posts} WHERE ID IN ($all)" ); // phpcs:ignore
 			if ( ! $deleted ) {

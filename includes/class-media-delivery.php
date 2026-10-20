@@ -35,19 +35,13 @@ final class Media_Delivery {
 		if ( ! is_file( $path ) || is_link( $path ) ) {
 			return;
 		}
-		// Never remove a file that another attachment uses as its own.
-		$other = get_posts(
-			array(
-				'post_type'      => 'attachment',
-				'post_status'    => 'any',
-				'posts_per_page' => 1,
-				'fields'         => 'ids',
-				'post__not_in'   => array( (int) $id ),
-				'meta_key'       => '_wp_attached_file', // phpcs:ignore WordPress.DB.SlowDBQuery -- One indexed lookup on delete.
-				'meta_value'     => $rel, // phpcs:ignore WordPress.DB.SlowDBQuery -- One indexed lookup on delete.
-			)
-		);
-		if ( ! $other ) {
+		// Never remove a file another attachment names anywhere: main file, metadata, sizes, edit backups or outputs.
+		try {
+			$shared = Media_Owners::shared( (int) $id, array( $rel ) );
+		} catch ( \Exception $e ) {
+			return; // Unsure: keep the file.
+		}
+		if ( ! $shared ) {
 			wp_delete_file( $path );
 		}
 	}

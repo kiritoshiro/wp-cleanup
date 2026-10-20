@@ -115,7 +115,7 @@ final class Media_Converter {
 		foreach ( $inv['files'] as $name => $file ) {
 			$own[] = ltrim( $inv['rel_dir'] . '/' . $name, '/' );
 		}
-		if ( Media_Inventory::shared_paths( $id, $own ) ) {
+		if ( Media_Owners::shared( $id, $own ) ) {
 			$result['message'] = __( 'Another attachment uses the same file. Remove or merge the duplicate first; nothing was converted.', 'wp-cleanup' );
 			return $result;
 		}

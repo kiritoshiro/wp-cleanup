@@ -349,7 +349,7 @@ final class Backup {
 	 * this works where a full restore is refused because a row was edited later.
 	 *
 	 * @param int $n Section of a converted or removed image.
-	 * @return string[] Uploads-relative paths copied back.
+	 * @return array{copied:string[],refused:string[]} Paths copied back, and shared paths whose folder is not a plain folder inside uploads.
 	 * @throws \RuntimeException When a file cannot be copied.
 	 */
 	public function restore_missing_files( $n ) {
@@ -358,21 +358,50 @@ final class Backup {
 		}
 		$item = $this->manifest['items'][ $n ];
 		if ( ! in_array( $item['type'], array( 'media', 'media_delete' ), true ) || 'deleted' !== $item['result'] || ! empty( $item['restored'] ) ) {
-			return array();
+			return array( 'copied' => array(), 'refused' => array() );
 		}
-		$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
-		$qdir    = $this->dir . '/files/' . $n . '/orig';
+		$root = realpath( wp_upload_dir( null, false )['basedir'] );
+		$from = realpath( $this->dir . '/files/' . $n . '/orig' );
+		if ( ! $root || ! $from ) {
+			return array( 'copied' => array(), 'refused' => array() );
+		}
+		$root    = untrailingslashit( wp_normalize_path( $root ) );
+		$from    = untrailingslashit( wp_normalize_path( $from ) );
 		$missing = array();
 		foreach ( (array) ( isset( $item['extra']['moved'] ) ? $item['extra']['moved'] : array() ) as $rel ) {
-			$rel = ltrim( wp_normalize_path( (string) $rel ), '/' );
-			if ( '' !== $rel && false === strpos( '/' . $rel . '/', '/../' ) && ! file_exists( $uploads . '/' . $rel ) && is_file( $qdir . '/' . $rel ) ) {
-				$missing[] = $rel;
+			if ( ! self::safe_relative( $rel ) ) {
+				continue; // Not a plain uploads-relative path; never followed.
+			}
+			$source = realpath( $from . '/' . $rel );
+			$target = $root . '/' . $rel;
+			if ( $source && 0 === strpos( wp_normalize_path( $source ), $from . '/' ) && is_file( $source ) && ! is_link( $target ) && ! file_exists( $target ) ) {
+				$missing[ $rel ] = $source;
 			}
 		}
-		$copied = array();
-		foreach ( $missing ? Media_Inventory::shared_paths( 0, $missing ) : array() as $rel ) {
-			wp_mkdir_p( dirname( $uploads . '/' . $rel ) );
-			if ( ! @copy( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Reported below.
+		$copied  = array();
+		$refused = array();
+		foreach ( $missing ? Media_Owners::shared( 0, array_keys( $missing ) ) : array() as $rel ) {
+			$folder = self::safe_folder( $root, dirname( $rel ) );
+			if ( null === $folder ) {
+				$refused[] = $rel; // A link or something outside uploads: never written through.
+				continue;
+			}
+			$target = $folder . '/' . wp_basename( $rel );
+			$out    = @fopen( $target, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Exclusive create: never overwrites, never follows a link.
+			if ( ! $out ) {
+				if ( is_link( $target ) || file_exists( $target ) ) {
+					continue; // Something appeared there meanwhile; leave it.
+				}
+				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+			}
+			$in = @fopen( $missing[ $rel ], 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Backup copy.
+			$ok = $in && false !== stream_copy_to_stream( $in, $out );
+			if ( $in ) {
+				fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			}
+			$ok = fclose( $out ) && $ok; // phpcs:ignore WordPress.WP.AlternativeFunctions
+			if ( ! $ok ) {
+				@unlink( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Our own partial file.
 				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
 			}
 			$copied[] = $rel;
@@ -382,7 +411,52 @@ final class Backup {
 			$this->set_extra( $n, 'files_restored', array_values( array_unique( array_merge( $before, $copied ) ) ) );
 			Media_Inventory::flush();
 		}
-		return $copied;
+		return array( 'copied' => $copied, 'refused' => $refused );
+	}
+
+	/**
+	 * A plain uploads-relative path: forward slashes only, no drive, colon, NUL,
+	 * leading slash, or empty, "." or ".." segment.
+	 *
+	 * @param mixed $rel Path from a manifest.
+	 */
+	private static function safe_relative( $rel ) {
+		if ( ! is_string( $rel ) || '' === $rel || preg_match( '#[\\\\:\x00]#', $rel ) || '/' === $rel[0] ) {
+			return false;
+		}
+		foreach ( explode( '/', $rel ) as $part ) {
+			if ( '' === $part || '.' === $part || '..' === $part ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The folder under the uploads root, created one level at a time where missing,
+	 * or null when any level is a link or the result resolves outside uploads.
+	 *
+	 * @param string $root    Canonical uploads root.
+	 * @param string $sub_dir Relative folder ("." for the root).
+	 * @return string|null
+	 */
+	private static function safe_folder( $root, $sub_dir ) {
+		$folder = $root;
+		foreach ( '.' === $sub_dir ? array() : explode( '/', $sub_dir ) as $part ) {
+			$folder .= '/' . $part;
+			if ( is_link( $folder ) ) {
+				return null;
+			}
+			if ( ! file_exists( $folder ) && ! @mkdir( $folder, 0755 ) && ! is_dir( $folder ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- One level, checked below.
+				return null;
+			}
+			if ( is_link( $folder ) || ! is_dir( $folder ) ) {
+				return null;
+			}
+		}
+		$real = realpath( $folder );
+		$real = $real ? untrailingslashit( wp_normalize_path( $real ) ) : '';
+		return ( $real === $root || 0 === strpos( $real . '/', $root . '/' ) ) ? $folder : null;
 	}
 
 	/**
@@ -484,6 +558,7 @@ final class Backup {
 	 */
 	public function replay_sql( $n ) {
 		global $wpdb;
+		Media_Owners::reset(); // Raw SQL may bring attachment rows back.
 		$file = $this->sql_file( $n );
 		if ( ! is_readable( $file ) ) {
 			return 0;

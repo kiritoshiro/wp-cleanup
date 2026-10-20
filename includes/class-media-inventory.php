@@ -321,69 +321,6 @@ final class Media_Inventory {
 	}
 
 	/**
-	 * Which of these files another attachment still names, so they must stay in place.
-	 *
-	 * Each candidate's file is located the way WordPress locates it (get_attached_file()),
-	 * so an absolute `_wp_attached_file` counts as well as the usual relative one.
-	 *
-	 * @param int      $self_id Attachment the files are being taken from.
-	 * @param string[] $paths   Uploads-relative paths.
-	 * @return string[] The shared subset of $paths.
-	 * @throws \RuntimeException When the check cannot be completed.
-	 */
-	public static function shared_paths( $self_id, array $paths ) {
-		global $wpdb;
-		$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
-		$wanted  = array();
-		foreach ( $paths as $rel ) {
-			$rel = ltrim( wp_normalize_path( (string) $rel ), '/' );
-			$sub = dirname( $rel );
-			$wanted[ '.' === $sub ? '' : $sub ][ strtolower( wp_basename( $rel ) ) ] = $rel;
-		}
-		$shared = array();
-		foreach ( $wanted as $rel_dir => $names_here ) {
-			// Relative or absolute, with either separator (Windows stores "C:\...\uploads\2024\05\x.jpg").
-			$like = '' === $rel_dir ? '%' : '%' . $wpdb->esc_like( $rel_dir . '/' ) . '%';
-			$back = '' === $rel_dir ? '%' : '%' . $wpdb->esc_like( str_replace( '/', '\\', $rel_dir ) . '\\' ) . '%';
-			$ids  = $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND post_id <> %d AND ( meta_value LIKE %s OR meta_value LIKE %s )", $self_id, $like, $back ) );
-			if ( $wpdb->last_error ) {
-				throw new \RuntimeException( __( 'Could not check whether image files are shared.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
-			}
-			foreach ( (array) $ids as $post_id ) {
-				$post_id = (int) $post_id;
-				$main    = wp_normalize_path( (string) get_attached_file( $post_id, true ) );
-				if ( '' === $main || strtolower( dirname( $main ) ) !== strtolower( rtrim( $uploads . '/' . $rel_dir, '/' ) ) ) {
-					continue;
-				}
-				$meta  = wp_get_attachment_metadata( $post_id, true );
-				$names = array( $main );
-				if ( ! empty( $meta['original_image'] ) ) {
-					$names[] = $meta['original_image'];
-				}
-				foreach ( (array) ( isset( $meta['sizes'] ) ? $meta['sizes'] : array() ) as $size ) {
-					$names[] = isset( $size['file'] ) ? $size['file'] : '';
-				}
-				foreach ( (array) get_post_meta( $post_id, '_wp_attachment_backup_sizes', true ) as $size ) {
-					$names[] = is_array( $size ) && isset( $size['file'] ) ? $size['file'] : '';
-				}
-				$outputs = get_post_meta( $post_id, Media_Policy::OUTPUT_META, true );
-				if ( is_array( $outputs ) ) {
-					foreach ( array( 'jpeg', 'avif_full', 'avif_small' ) as $variant ) {
-						$names[] = isset( $outputs[ $variant ] ) ? $outputs[ $variant ] : '';
-					}
-				}
-				foreach ( array_filter( $names ) as $name ) {
-					$key = strtolower( wp_basename( $name ) );
-					if ( isset( $names_here[ $key ] ) ) {
-						$shared[ $names_here[ $key ] ] = true;
-					}
-				}
-			}
-		}
-		return array_keys( $shared );
-	}
-
-	/**
 	 * Summary over all image attachments, in pages.
 	 *
 	 * @param int $offset Offset.
