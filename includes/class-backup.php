@@ -387,12 +387,37 @@ final class Backup {
 				continue;
 			}
 			$target = $folder . '/' . wp_basename( $rel );
-			$out    = @fopen( $target, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Exclusive create: never overwrites, never follows a link.
+			/**
+			 * Test seam: runs between checking the folder and creating the file.
+			 *
+			 * @param string $folder Checked canonical folder.
+			 * @param string $rel    Uploads-relative path.
+			 */
+			do_action( 'wp_cleanup_restore_file_before_open', $folder, $rel );
+			$out = @fopen( $target, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Exclusive create: never overwrites, never follows a final link.
 			if ( ! $out ) {
 				if ( is_link( $target ) || file_exists( $target ) ) {
 					continue; // Something appeared there meanwhile; leave it.
 				}
 				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+			}
+			// A parent folder could have been swapped for a link after the check. Before
+			// writing anything, the new file must be the one at the checked canonical path.
+			$made = fstat( $out );
+			clearstatcache( true, $target );
+			$here = @stat( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Checked below.
+			$real = realpath( $target );
+			$same = $made && $here && $made['dev'] === $here['dev'] && $made['ino'] === $here['ino'];
+			if ( ! $same || ! $real || wp_normalize_path( $real ) !== $target ) {
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+				if ( $same ) {
+					@unlink( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Still reachable and provably our own empty file.
+				}
+				// Otherwise the empty file we made is no longer reachable by this path; nothing
+				// was written to it and nothing was overwritten. Remaining limit: a swap and
+				// swap-back around the open can leave that empty file where the link pointed.
+				$refused[] = $rel;
+				continue;
 			}
 			$in = @fopen( $missing[ $rel ], 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Backup copy.
 			$ok = $in && false !== stream_copy_to_stream( $in, $out );
@@ -425,8 +450,8 @@ final class Backup {
 			return false;
 		}
 		foreach ( explode( '/', $rel ) as $part ) {
-			if ( '' === $part || '.' === $part || '..' === $part ) {
-				return false;
+			if ( '' === $part || '.' === $part || '..' === $part || rtrim( $part, '. ' ) !== $part ) {
+				return false; // Includes Windows aliases ending in a dot or space.
 			}
 		}
 		return true;
@@ -456,7 +481,7 @@ final class Backup {
 		}
 		$real = realpath( $folder );
 		$real = $real ? untrailingslashit( wp_normalize_path( $real ) ) : '';
-		return ( $real === $root || 0 === strpos( $real . '/', $root . '/' ) ) ? $folder : null;
+		return ( $real === $root || 0 === strpos( $real . '/', $root . '/' ) ) ? $real : null;
 	}
 
 	/**

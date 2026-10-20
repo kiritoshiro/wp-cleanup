@@ -84,7 +84,10 @@ final class Media_Owners {
 	/**
 	 * Normalised, lower-case, uploads-relative key for a stored path, or null when
 	 * it does not name a file inside uploads. Absolute paths count when they point
-	 * into uploads, with either separator; "./", "//" and inner ".." are resolved.
+	 * into uploads, with either separator; "./", "//" and inner ".." are resolved,
+	 * and trailing dots and spaces are dropped from each part as Windows does.
+	 * Case and trailing-dot folding are deliberate on every system: a false "shared"
+	 * only leaves a file in place, while a missed alias could move a used file.
 	 *
 	 * @param string $path Stored path.
 	 * @param string $root Normalised uploads base directory.
@@ -116,6 +119,12 @@ final class Media_Owners {
 				}
 				array_pop( $parts );
 				continue;
+			}
+			// Windows drops trailing dots and spaces, so "x.jpg." and "x.jpg " open x.jpg.
+			// Folding them everywhere (like case) can only over-report sharing, never miss it.
+			$part = rtrim( $part, '. ' );
+			if ( '' === $part ) {
+				return null;
 			}
 			$parts[] = $part;
 		}

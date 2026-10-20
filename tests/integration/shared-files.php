@@ -258,7 +258,7 @@ wp_update_attachment_metadata( $bait, array( 'file' => 'wpcs-bait.png', 'sizes' 
 	'b' => array( 'file' => 'wpcs-junction/wpcs-esc.png' ),
 	'c' => array( 'file' => $sub . '/wpcs-lost.png' ),
 ) ) );
-$tampered = array( '../evil.png', '/' . ltrim( $outside, '/' ) . '/evil.png', 'C:/evil.png', $sub . '\\wpcs-lost.png', $sub . '/./wpcs-lost.png', $sub . '//wpcs-lost.png', 'wpcs-junction/wpcs-esc.png' );
+$tampered = array( '../evil.png', '/' . ltrim( $outside, '/' ) . '/evil.png', 'C:/evil.png', $sub . '\\wpcs-lost.png', $sub . '/./wpcs-lost.png', $sub . '//wpcs-lost.png', $sub . '/wpcs-lost.png.', $sub . '/wpcs-lost.png ', 'wpcs-junction/wpcs-esc.png' );
 $q->set_extra( 0, 'moved', array_merge( (array) $q->manifest['items'][0]['extra']['moved'], $tampered ) );
 // A linked folder inside uploads that leads outside it (a junction on Windows).
 $link = $uploads_root . '/wpcs-junction';
@@ -293,6 +293,47 @@ if ( @symlink( $outside . '/dangling.png', $twin_file[0] ) ) { // phpcs:ignore
 } else {
 	WP_CLI::log( '  skip a dangling-link destination check: this system cannot create file symlinks' );
 }
+// A parent folder swapped for a link after it was checked, just before the file is created.
+$race_rel = 'wpcs-race/wpcs-race.png';
+$racer    = wp_insert_attachment( array( 'post_mime_type' => 'image/png', 'post_title' => 'racer', 'post_status' => 'inherit' ) );
+update_post_meta( $racer, '_wpcs_test', 1 );
+update_post_meta( $racer, '_wp_attached_file', $race_rel );
+wp_mkdir_p( $qorig . '/wpcs-race' );
+file_put_contents( $qorig . '/' . $race_rel, 'race' );
+$q = Backup::open( $backup->id );
+$q->set_extra( 0, 'moved', array_merge( (array) $q->manifest['items'][0]['extra']['moved'], array( $race_rel ) ) );
+$race_dir   = $uploads_root . '/wpcs-race';
+$race_moved = $uploads_root . '/wpcs-race-moved';
+$swapped    = false;
+$swap       = static function ( $folder, $rel ) use ( $race_rel, $race_dir, $race_moved, $outside, &$swapped ) {
+	if ( $race_rel !== $rel ) {
+		return;
+	}
+	rename( $race_dir, $race_moved );
+	if ( '\\' === DIRECTORY_SEPARATOR ) {
+		exec( 'mklink /J ' . escapeshellarg( str_replace( '/', '\\', $race_dir ) ) . ' ' . escapeshellarg( str_replace( '/', '\\', $outside ) ) . ' >NUL 2>&1' ); // phpcs:ignore
+	} else {
+		@symlink( $outside, $race_dir ); // phpcs:ignore
+	}
+	$swapped = file_exists( $race_dir ) && wp_normalize_path( (string) realpath( $race_dir ) ) === wp_normalize_path( (string) realpath( $outside ) );
+};
+add_action( 'wp_cleanup_restore_file_before_open', $swap, 10, 2 );
+$raced = Backup::open( $backup->id )->restore_missing_files( 0 );
+remove_action( 'wp_cleanup_restore_file_before_open', $swap, 10 );
+if ( $swapped ) {
+	wpcs_ok( in_array( $race_rel, $raced['refused'], true ) && ! in_array( $race_rel, $raced['copied'], true ) && ! file_exists( $outside . '/wpcs-race.png' ), 'a parent folder swapped for a link after the check is detected; nothing is left outside uploads' );
+} else {
+	WP_CLI::log( '  skip the parent-swap check: no link could be made here' );
+}
+if ( file_exists( $race_dir ) ) {
+	'\\' === DIRECTORY_SEPARATOR ? exec( 'rmdir ' . escapeshellarg( str_replace( '/', '\\', $race_dir ) ) ) : @unlink( $race_dir ); // phpcs:ignore
+}
+if ( is_dir( $race_moved ) ) {
+	@rmdir( $race_moved ); // phpcs:ignore
+}
+$q = Backup::open( $backup->id );
+$q->set_extra( 0, 'moved', array_values( array_diff( (array) $q->manifest['items'][0]['extra']['moved'], array( $race_rel ) ) ) );
+
 if ( is_dir( $link ) || file_exists( $link ) ) {
 	'\\' === DIRECTORY_SEPARATOR ? exec( 'rmdir ' . escapeshellarg( str_replace( '/', '\\', $link ) ) ) : @unlink( $link ); // phpcs:ignore
 }
@@ -340,8 +381,28 @@ update_post_meta( $sub_owner, Media_Policy::OUTPUT_META, array( 'jpeg' => 'wpcs-
 wpcs_ok( 2 === count( Media_Owners::shared( $probe, array( $sub . '/wpcs-thumbs/t.png', 'wpcs-elsewhere/fallback.jpg' ) ) ), 'size entries carrying a sub-folder and uploads-relative outputs keep their folder' );
 $forget( $sub_owner );
 $twin_of_probe = wpcs_twin( $probe );
-$variants      = array( './' . $probe_rel, $sub . '//wpcs-probe.png', $sub . '/x/../wpcs-probe.png', strtoupper( $probe_rel ), $probe_dir . '/wpcs-probe.png', str_replace( '/', '\\', $probe_dir ) . '\\wpcs-probe.png' );
-wpcs_ok( Media_Owners::shared( $probe, $variants ) === $variants, 'path spellings are normalised: ./, //, inner .., case, absolute and backslash' );
+$variants      = array( './' . $probe_rel, $sub . '//wpcs-probe.png', $sub . '/x/../wpcs-probe.png', strtoupper( $probe_rel ), $probe_dir . '/wpcs-probe.png', str_replace( '/', '\\', $probe_dir ) . '\\wpcs-probe.png', $probe_rel . '.', $probe_rel . ' ', $probe_rel . '. .', $sub . './wpcs-probe.png' );
+wpcs_ok( Media_Owners::shared( $probe, $variants ) === $variants, 'path spellings are normalised: ./, //, inner .., case, absolute, backslash, trailing dots and spaces' );
+
+// Another attachment that spells the file with a trailing dot (one file on Windows).
+$dotted     = wpcs_upload( 'wpcs-dot.png', 900, 600 );
+$dot_files  = wpcs_files( $dotted );
+$dot_meta   = wp_get_attachment_metadata( $dotted, true );
+$dot_meta['file']  = $dot_meta['file'] . '.';
+$dot_meta['sizes'] = array(); // The trailing-dot main file is its only reference.
+$dot_twin   = $other( $sub . '/wpcs-dot.png.', $dot_meta );
+wpcs_use( $dot_twin );
+$dot_plan   = Media_Converter::convert( $dotted, null, true );
+$dot_backup = Backup::start();
+$backups[]  = $dot_backup->id;
+$dot_conv   = Media_Converter::convert( $dotted, $dot_backup );
+wp_cache_flush();
+wpcs_ok( 'planned' !== $dot_plan['status'] && 'converted' !== $dot_conv['status'] && wpcs_all_exist( $dot_files ), 'converting refuses a file another attachment names with a trailing dot (' . $dot_conv['message'] . ')' );
+$dot_result = Media_Remover::remove( $dotted, $dot_backup, \WPCleanup\Media_Usage::build() );
+wp_cache_flush();
+wpcs_ok( 'deleted' === $dot_result['status'] && is_file( $dot_files[0] ) && ! array_filter( array_slice( $dot_files, 1 ), 'is_file' ), 'removing the plain spelling keeps the main file the trailing-dot twin names and backs up its own sizes' );
+Backup::open( $dot_backup->id )->restore();
+$forget( $dot_twin );
 wpcs_ok( ! Media_Owners::shared( $probe, array( '../' . $probe_rel, $sub . '/wpcs-probe.png.bak' ) ), 'paths outside uploads or merely similar are not shared' );
 
 /* ---------------------------------------------------------------------- */
