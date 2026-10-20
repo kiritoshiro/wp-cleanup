@@ -110,6 +110,15 @@ final class Media_Converter {
 			$result['message'] = $gap ? __( 'Already follows the image policy or exceeds the selected size gap.', 'wp-cleanup' ) : __( 'Already follows the image policy.', 'wp-cleanup' );
 			return $result;
 		}
+		// Converting moves every old file into the backup; one another attachment names would vanish from under it.
+		$own = array();
+		foreach ( $inv['files'] as $name => $file ) {
+			$own[] = ltrim( $inv['rel_dir'] . '/' . $name, '/' );
+		}
+		if ( Media_Inventory::shared_paths( $id, $own ) ) {
+			$result['message'] = __( 'Another attachment uses the same file. Remove or merge the duplicate first; nothing was converted.', 'wp-cleanup' );
+			return $result;
+		}
 		if ( $dry_run ) {
 			$result['status'] = 'planned';
 			/* translators: %d: files */

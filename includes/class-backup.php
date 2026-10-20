@@ -344,6 +344,48 @@ final class Backup {
 	}
 
 	/**
+	 * Copy back only those backed-up image files that are missing now and that another
+	 * attachment still names. No database row changes and the backup keeps its copy, so
+	 * this works where a full restore is refused because a row was edited later.
+	 *
+	 * @param int $n Section of a converted or removed image.
+	 * @return string[] Uploads-relative paths copied back.
+	 * @throws \RuntimeException When a file cannot be copied.
+	 */
+	public function restore_missing_files( $n ) {
+		if ( ! is_int( $n ) || ! isset( $this->manifest['items'][ $n ] ) ) {
+			throw new \InvalidArgumentException( __( 'Backup item not found.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+		}
+		$item = $this->manifest['items'][ $n ];
+		if ( ! in_array( $item['type'], array( 'media', 'media_delete' ), true ) || 'deleted' !== $item['result'] || ! empty( $item['restored'] ) ) {
+			return array();
+		}
+		$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
+		$qdir    = $this->dir . '/files/' . $n . '/orig';
+		$missing = array();
+		foreach ( (array) ( isset( $item['extra']['moved'] ) ? $item['extra']['moved'] : array() ) as $rel ) {
+			$rel = ltrim( wp_normalize_path( (string) $rel ), '/' );
+			if ( '' !== $rel && false === strpos( '/' . $rel . '/', '/../' ) && ! file_exists( $uploads . '/' . $rel ) && is_file( $qdir . '/' . $rel ) ) {
+				$missing[] = $rel;
+			}
+		}
+		$copied = array();
+		foreach ( $missing ? Media_Inventory::shared_paths( 0, $missing ) : array() as $rel ) {
+			wp_mkdir_p( dirname( $uploads . '/' . $rel ) );
+			if ( ! @copy( $qdir . '/' . $rel, $uploads . '/' . $rel ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Reported below.
+				throw new \RuntimeException( sprintf( /* translators: %s: file path */ __( 'Could not copy %s back.', 'wp-cleanup' ), $rel ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped in admin notices.
+			}
+			$copied[] = $rel;
+		}
+		if ( $copied ) {
+			$before = isset( $item['extra']['files_restored'] ) ? (array) $item['extra']['files_restored'] : array();
+			$this->set_extra( $n, 'files_restored', array_values( array_unique( array_merge( $before, $copied ) ) ) );
+			Media_Inventory::flush();
+		}
+		return $copied;
+	}
+
+	/**
 	 * @param int   $n    Section.
 	 * @param array $item Manifest item.
 	 * @return string Message.

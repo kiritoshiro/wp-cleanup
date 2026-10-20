@@ -44,6 +44,8 @@ This page is then for older images. Deleting any attachment also deletes its rec
 
 **Space is freed when the backup set is deleted** on the Backups tab, after checking the site. Until then, **Restore** puts the old files and rewritten database values back. It refuses to overwrite edits made after conversion.
 
+**Files another attachment also uses are never moved.** Two attachments can point at the same physical file (an import or a re-registered placeholder often does this). Converting either one is refused until the duplicate is removed or merged. Removing or merging a duplicate deletes its attachment row and backs up only its own files; any file another attachment still names stays in place, and the backup entry lists it as left in place. Versions up to 0.12.1 could move such a shared file during conversion. For backups made that way, **Restore missing files only** on the Backups tab copies back each backed-up file that is missing but still named by an attachment, without changing any database row, even when a full restore is refused because a post was edited later. The backup keeps its copy.
+
 JPEG encoding is required when the fallback is enabled. AVIF requires WordPress 6.5+ and GD or Imagick with AVIF support; without it, conversion only produces JPEG when the fallback is enabled. AVIF-only mode requires AVIF encoding support. New files get a numeric suffix only when another attachment's file already has that name. When the clean name belongs to an old file of the same image (re-converting after a policy change), the new file is written under a temporary name and takes the clean name once the old file is in the backup, so names don't drift to `-1`, `-1-1`. Each conversion result and backup entry lists every backed-up and new file with its dimensions, format and size.
 
     wp cleanup images status
@@ -206,6 +208,7 @@ WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/usage.
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/integrity.php   # data check, ALPS marker, file details; set WPCU_ALPS_DIR to test against the real ALPS image code
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/guard.php   # per-image lock, check before converting, timeout recovery
 WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/alps-theme.php   # uploads the ALPS theme converted itself; JPEG fallback removed on delete
+WPCU_TESTS=1 wp eval-file wp-content/plugins/wp-cleanup/tests/integration/shared-files.php   # two attachments, one file: remove, merge, convert, restore missing files only
 ```
 
 The usage suite (48 assertions) covers:

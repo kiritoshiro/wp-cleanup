@@ -66,19 +66,35 @@ final class Media_Remover {
 			}
 			$paths[] = ltrim( $inv['rel_dir'] . '/' . $name, '/' );
 		}
-		if ( self::shared_files( $id, $inv['rel_dir'], $paths ) ) {
-			$result['message'] = __( 'Another attachment shares an image file; nothing was removed.', 'wp-cleanup' );
+		// Files another attachment still names stay where they are; only this row lets go of them.
+		try {
+			$shared = Media_Inventory::shared_paths( $id, $paths );
+		} catch ( \Exception $e ) {
+			$result['message'] = $e->getMessage();
 			return $result;
+		}
+		$paths = array_values( array_diff( $paths, $shared ) );
+		$bytes = 0;
+		foreach ( $paths as $rel ) {
+			$bytes += $inv['files'][ wp_basename( $rel ) ]['bytes'];
 		}
 
 		$n       = null;
 		$moved   = array();
 		$deleted = false;
+		// WordPress deletes an attachment's files with its row; never the shared ones.
+		$keep_abs = array();
+		foreach ( $shared as $rel ) {
+			$keep_abs[ strtolower( $uploads . '/' . $rel ) ] = true;
+		}
+		$protect = static function ( $file ) use ( $keep_abs ) {
+			return isset( $keep_abs[ strtolower( wp_normalize_path( (string) $file ) ) ] ) ? '' : $file;
+		};
 		try {
 			$n = $backup->add_item( array(
 				'type' => 'media_delete', 'id' => (string) $id,
 				'label' => wp_basename( get_attached_file( $id, true ) ),
-				'status' => 'unused', 'owner' => '', 'count' => count( $paths ), 'bytes' => $inv['bytes'],
+				'status' => 'unused', 'owner' => '', 'count' => count( $paths ), 'bytes' => $bytes,
 			) );
 			foreach ( array( $wpdb->posts => 'ID', $wpdb->postmeta => 'post_id', $wpdb->term_relationships => 'object_id', $wpdb->comments => 'comment_post_ID' ) as $table => $key ) {
 				$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM `' . Backup::ident( $table ) . '` WHERE `' . Backup::ident( $key ) . '` = %d', $id ), ARRAY_A ); // phpcs:ignore -- table and column names come from wpdb.
@@ -104,6 +120,9 @@ final class Media_Remover {
 				$backup->write_rows( $n, $wpdb->commentmeta, (array) $rows );
 			}
 			$backup->set_extra( $n, 'moved', $paths );
+			if ( $shared ) {
+				$backup->set_extra( $n, 'kept_shared', $shared );
+			}
 			$qdir = $backup->quarantine_dir( $n ) . '/orig';
 			foreach ( $paths as $rel ) {
 				$dst = $qdir . '/' . $rel;
@@ -113,14 +132,24 @@ final class Media_Remover {
 				}
 				$moved[] = $rel;
 			}
-			if ( ! wp_delete_attachment( $id, true ) ) {
+			add_filter( 'wp_delete_file', $protect, PHP_INT_MAX );
+			try {
+				$gone = wp_delete_attachment( $id, true );
+			} finally {
+				remove_filter( 'wp_delete_file', $protect, PHP_INT_MAX );
+			}
+			if ( ! $gone ) {
 				throw new \RuntimeException( __( 'WordPress refused to delete the attachment.', 'wp-cleanup' ) );
 			}
 			$deleted = true;
-			$backup->set_result( $n, 'deleted', sprintf( /* translators: %d: number of files */ __( '%d file(s) moved into the backup set.', 'wp-cleanup' ), count( $moved ) ) );
+			$message = sprintf( /* translators: %d: number of files */ __( '%d file(s) moved into the backup set.', 'wp-cleanup' ), count( $moved ) );
+			if ( $shared ) {
+				$message .= ' ' . sprintf( /* translators: %d: number of files */ __( '%d file(s) another attachment still uses were left in place.', 'wp-cleanup' ), count( $shared ) );
+			}
+			$backup->set_result( $n, 'deleted', $message );
 			Media_Inventory::flush();
 			$result['status']  = 'deleted';
-			$result['message'] = __( 'Attachment removed; files are in the backup set.', 'wp-cleanup' );
+			$result['message'] = $shared ? __( 'Attachment removed; its own files are in the backup set and files another attachment uses were left in place.', 'wp-cleanup' ) : __( 'Attachment removed; files are in the backup set.', 'wp-cleanup' );
 		} catch ( \Exception $e ) {
 			if ( $deleted && null !== $n ) {
 				try {
@@ -139,48 +168,6 @@ final class Media_Remover {
 			$result['message'] = $e->getMessage();
 		}
 		return $result;
-	}
-
-	/** Refuse files also named in another attachment's metadata. */
-	private static function shared_files( $id, $rel_dir, array $paths ) {
-		global $wpdb;
-		$wanted = array_fill_keys( array_map( 'strtolower', $paths ), true );
-		$rows   = $wpdb->get_results( $wpdb->prepare( "SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND post_id <> %d AND meta_value LIKE %s", $id, ( '' === $rel_dir ? '' : $wpdb->esc_like( $rel_dir . '/' ) ) . '%' ) );
-		if ( $wpdb->last_error ) {
-			throw new \RuntimeException( __( 'Could not check whether image files are shared.', 'wp-cleanup' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; admin notices escape output.
-		}
-		$uploads = wp_normalize_path( wp_upload_dir( null, false )['basedir'] );
-		foreach ( (array) $rows as $row ) {
-			$main = wp_normalize_path( (string) $row->meta_value );
-			if ( 0 === strpos( $main, $uploads . '/' ) ) {
-				$main = substr( $main, strlen( $uploads ) + 1 );
-			}
-			if ( dirname( $main ) !== ( '' === $rel_dir ? '.' : $rel_dir ) ) {
-				continue;
-			}
-			$names = array( wp_basename( $main ) );
-			$meta  = wp_get_attachment_metadata( (int) $row->post_id, true );
-			if ( ! empty( $meta['original_image'] ) ) {
-				$names[] = $meta['original_image'];
-			}
-			foreach ( (array) ( isset( $meta['sizes'] ) ? $meta['sizes'] : array() ) as $size ) {
-				$names[] = isset( $size['file'] ) ? $size['file'] : '';
-			}
-			foreach ( (array) get_post_meta( (int) $row->post_id, '_wp_attachment_backup_sizes', true ) as $size ) {
-				$names[] = is_array( $size ) && isset( $size['file'] ) ? $size['file'] : '';
-			}
-			$outputs = get_post_meta( (int) $row->post_id, Media_Policy::OUTPUT_META, true );
-			if ( is_array( $outputs ) ) {
-				$names[] = isset( $outputs['avif_full'] ) ? $outputs['avif_full'] : '';
-				$names[] = isset( $outputs['avif_small'] ) ? $outputs['avif_small'] : '';
-			}
-			foreach ( array_filter( $names ) as $name ) {
-				if ( isset( $wanted[ strtolower( ltrim( $rel_dir . '/' . wp_basename( $name ), '/' ) ) ] ) ) {
-					return true;
-				}
-			}
-		}
-		return false;
 	}
 
 	/** Restore rows and files, without replacing a recreated attachment. */
