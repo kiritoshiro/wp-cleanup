@@ -143,7 +143,7 @@ Each item gets a status, based on evidence in this order:
 5. **Unknown owner**: nothing references it, and the prefix isn't recognised. Deleted only after you confirm you've reviewed it.
 6. **Safe to clean**: structural junk (rows pointing at deleted objects, expired transients).
 
-"References" comes from an index of every identifier-like string literal and class name in installed PHP code, including WordPress core. The index is cached and rebuilt whenever plugins or themes change. If any code can't be fully read (for example a file over 8 MB), nothing is marked orphaned until it can.
+"References" comes from an index of every identifier-like string literal and class name in installed PHP code, including WordPress core and libraries plugins bundle (under `libs/`, `vendor/` and so on). Path literals count per segment, so a folder built as `$dir . '/name'` or `"{$dir}/name"` is credited to that code; another plugin's main file (`'other/other.php'`) is not. The index is cached and rebuilt whenever plugins or themes change. If any code can't be fully read (for example a file over 8 MB, a folder PHP can't list, or a file the pattern matcher gives up on), nothing is marked orphaned until it can.
 
 Many plugins and themes build names at runtime, so the name in the database differs from the literal in their code. Each name is therefore also checked in these forms:
 

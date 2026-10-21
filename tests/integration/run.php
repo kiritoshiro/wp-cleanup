@@ -65,7 +65,7 @@ $tables  = array( 'wfconfig', 'fixact_log', 'zzold_table', 'staging_options', 's
 foreach ( $tables as $t ) {
 	$wpdb->query( "DROP TABLE IF EXISTS `{$p}{$t}`" );
 }
-$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name IN ('wpseo_titles','zzleftover_config','fixinact_settings','fixact_settings','fixact_dyn_one','_transient_wpseo_cache','_transient_zzexp','_transient_timeout_zzexp','_transient_zzlive','_transient_timeout_zzlive','_fixcf_footer|||0|value','fixact_settings_3','puc_external_updates_theme-wpcu-fixture-active','external_updates-wpcu-fixture-inactive','external_updates-zzgone-plugin','shop_single_image_size','post_by_email_address4','plugins_delete_result_1')" );
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name IN ('wpseo_titles','zzleftover_config','fixinact_settings','fixact_settings','fixact_dyn_one','_transient_wpseo_cache','_transient_zzexp','_transient_timeout_zzexp','_transient_zzlive','_transient_timeout_zzlive','_fixcf_footer|||0|value','fixact_settings_3','puc_external_updates_theme-wpcu-fixture-active','external_updates-wpcu-fixture-inactive','external_updates-zzgone-plugin','shop_single_image_size','post_by_email_address4','plugins_delete_result_1','factory_plugin_versions')" );
 $wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN ('_yoast_wpseo_focuskw','_fixact_meta','_fixcf_hero|slide_image|0|0|value','_zzcf_gone|x|0|0|value','_format_url') OR meta_key LIKE '\\_oembed\\_%' OR post_id = 999999" );
 $wpdb->query( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = '{$p}yoast_notifications'" );
 foreach ( array( 'wpcf7_contact_form', 'fixact_item' ) as $pt ) {
@@ -76,7 +76,7 @@ foreach ( array( 'wpcf7_contact_form', 'fixact_item' ) as $pt ) {
 foreach ( array( 'wordfence_daily_cron', 'wordfence_custom_sched', 'fixact_cron', 'zzold_cron_hook' ) as $hook ) {
 	wp_unschedule_hook( $hook );
 }
-foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs' ) as $dir ) {
+foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
 	if ( is_dir( $dir ) ) {
 		array_map( 'unlink', glob( $dir . '/*' ) );
 		rmdir( $dir );
@@ -136,7 +136,7 @@ $wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_zz
 $wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_oembed_' . md5( 'https://example.test/v' ), 'meta_value' => '<iframe></iframe>' ) );
 $wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_oembed_time_' . md5( 'https://example.test/v' ), 'meta_value' => (string) time() ) );
 $wpdb->insert( $wpdb->postmeta, array( 'post_id' => $post_id, 'meta_key' => '_format_url', 'meta_value' => 'https://example.test' ) );
-foreach ( array( '_fixcf_footer|||0|value', 'fixact_settings_3', 'puc_external_updates_theme-wpcu-fixture-active', 'external_updates-wpcu-fixture-inactive', 'external_updates-zzgone-plugin', 'shop_single_image_size', 'post_by_email_address4', 'plugins_delete_result_1' ) as $wpcu_name ) {
+foreach ( array( '_fixcf_footer|||0|value', 'fixact_settings_3', 'puc_external_updates_theme-wpcu-fixture-active', 'external_updates-wpcu-fixture-inactive', 'external_updates-zzgone-plugin', 'shop_single_image_size', 'post_by_email_address4', 'plugins_delete_result_1', 'factory_plugin_versions' ) as $wpcu_name ) {
 	$wpdb->insert( $wpdb->options, array( 'option_name' => $wpcu_name, 'option_value' => 'x', 'autoload' => 'no' ) );
 }
 $wpdb->query( "CREATE TABLE `{$p}e_events` (id INT PRIMARY KEY)" );
@@ -155,7 +155,7 @@ wp_update_term_count_now( array( $cat['term_taxonomy_id'] ), 'category' );
 wp_insert_comment( array( 'comment_post_ID' => $cf7_ids[1], 'comment_content' => 'note on a form', 'comment_approved' => 1 ) );
 wp_insert_post( array( 'post_type' => 'fixact_item', 'post_title' => 'Active CPT', 'post_status' => 'publish' ) );
 
-foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs' ) as $dir ) {
+foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
 	wp_mkdir_p( $dir );
 	file_put_contents( $dir . '/data.txt', 'content of ' . basename( $dir ) );
 }
@@ -223,6 +223,7 @@ $expect = array(
 	'table|' . $p . 'zzold_table'           => 'unknown',
 	'cron|zzold_cron_hook'                  => 'unknown',
 	'file|uploads/zzold-cache'              => 'unknown',
+	'file|uploads/zzgone-forms'             => 'unknown', // Active code only checks for 'zzgone-forms/zzgone-forms.php'.
 	'meta|post:_zzcf_gone|x|0|0|value'      => 'unknown', // Carbon Fields key of a field nobody defines.
 	// Known leftovers, labelled by verified signatures.
 	'table|' . $p . 'e_events'              => 'orphaned',
@@ -243,6 +244,9 @@ $expect = array(
 	'option|_fixcf_footer|||0|value'        => 'in_use',
 	'option|fixact_settings_3'              => 'in_use',  // Numeric suffix on a referenced name.
 	'option|puc_external_updates_theme-wpcu-fixture-active' => 'in_use', // Update cache named after an active plugin.
+	'option|factory_plugin_versions'        => 'in_use',  // Framework signature name, referenced by a copy bundled in active code.
+	'file|uploads/fixdir-css-js'            => 'in_use',  // Folder named only as $base . '/fixdir-css-js'.
+	'file|uploads/fixdir-tail'              => 'in_use',  // Folder named only as "{$base}/fixdir-tail".
 	// Core / protected.
 	'option|siteurl'                        => 'core',
 	'option|cron'                           => 'core',
@@ -272,6 +276,8 @@ wpcu_assert( 'WPCU Fixture Inactive' === $by['option|fixinact_settings']['owner'
 wpcu_assert( 'WPCU Fixture Active' === $by['meta|post:_fixcf_hero|slide_image|0|0|value']['owner'], 'Carbon Fields key attributed to the code defining the field, not to a prefix-only match elsewhere' );
 wpcu_assert( false !== strpos( $by['meta|post:_zzcf_gone|x|0|0|value']['reason'], 'Carbon Fields' ), 'unmatched Carbon Fields key explains its format' );
 wpcu_assert( 'medium' === $by['option|puc_external_updates_theme-wpcu-fixture-active']['confidence'], 'slug-only evidence has medium confidence' );
+wpcu_assert( 'WPCU Fixture Active' === $by['option|factory_plugin_versions']['owner'] && WPCleanup\Signatures::match( 'factory_plugin_versions' ), 'a framework signature name is attributed to the installed plugin bundling the framework' );
+wpcu_assert( 'WPCU Fixture Active' === $by['file|uploads/fixdir-css-js']['owner'] && 'WPCU Fixture Active' === $by['file|uploads/fixdir-tail']['owner'], 'folders named inside built paths are attributed to the code building them' );
 wpcu_assert( 'elementor' === $by['table|' . $p . 'e_events']['owner_slug'] && 'woocommerce' === $by['option|shop_single_image_size']['owner_slug'] && 'jetpack' === $by['option|post_by_email_address4']['owner_slug'], 'verified signatures name Elementor, WooCommerce and Jetpack' );
 $wpcu_sig = WPCleanup\Signatures::match( 'e_events' );
 wpcu_assert( $wpcu_sig && $wpcu_sig['exact'] && null === WPCleanup\Signatures::match( 'e_events_log' ), 'exact signature names match only themselves' );
@@ -409,6 +415,16 @@ wpcu_assert( ! $report['deleted'], 'default policy deletes nothing while index i
 remove_filter( 'wp_cleanup_index_max_files', $one_file );
 $full = ( new Scanner() )->scan( array( 'option' ) );
 wpcu_assert( empty( $full['incomplete'] ) && 'orphaned' === wpcu_status( wpcu_items_by_key( $full['items'] ), 'option|wpseo_titles' ), 'full index restores orphaned status' );
+// A file whose literals cannot be read (here: PCRE gives up) must not silently count as read.
+$wpcu_pcre = array( ini_get( 'pcre.jit' ), ini_get( 'pcre.backtrack_limit' ) );
+ini_set( 'pcre.jit', '0' );
+ini_set( 'pcre.backtrack_limit', '1' );
+$broken = Code_Index::load( true );
+ini_set( 'pcre.jit', $wpcu_pcre[0] );
+ini_set( 'pcre.backtrack_limit', $wpcu_pcre[1] );
+$wpcu_class = ( new WPCleanup\Classifier( $broken ) )->classify( array( 'wpseo_titles' ) );
+wpcu_assert( $broken->incomplete_sources() && 'unknown' === $wpcu_class['status'], 'unreadable literals flag the source as incomplete, so nothing is called orphaned' );
+Code_Index::load( true ); // Replace the cached partial index.
 
 /* ---------------------------------------------------------------------- */
 /* 7. Uninstall                                                           */
