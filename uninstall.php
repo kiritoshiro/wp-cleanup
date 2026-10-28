@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/class-storage.php';
 
 WPCleanup\Storage::delete_all();
 delete_option( WPCleanup\Storage::OPTION_DIR );
+delete_option( WPCleanup\Storage::OPTION_PATH );
 delete_option( 'wpcu_media_settings' );
 delete_site_transient( 'wpcu_github_release' );
 delete_option( 'wpcu_media_timing' );

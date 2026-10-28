@@ -384,6 +384,7 @@ final class Admin {
 		echo '<div class="wrap wpcu">';
 		echo '<h1>' . esc_html__( 'WP Cleanup', 'wp-cleanup' ) . '</h1>';
 		$this->render_notice();
+		$this->render_storage_notice();
 
 		echo '<div class="wpcu-toolbar">';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
@@ -443,6 +444,46 @@ final class Admin {
 			$this->render_items( $tab, $scan['items'] );
 		}
 		echo '</div>';
+	}
+
+	/**
+	 * Warn when backups sit in uploads on a server that ignores .htaccess/web.config (nginx).
+	 */
+	private function render_storage_notice() {
+		try {
+			$status = Storage::status();
+		} catch ( \RuntimeException $e ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( $e->getMessage() ) . '</p></div>';
+			return;
+		}
+		if ( $status['server_denies'] || '' === $status['nginx_rule'] ) {
+			return;
+		}
+		if ( $status['outside'] ) {
+			/* translators: %s: folder path */
+			$message = sprintf( __( 'Older backup sets are still in a folder inside uploads (%s). They move to the private folder outside the web root once they have not been used for an hour. Until then, this server (not Apache or IIS) ignores the folder\'s deny rules.', 'wp-cleanup' ), $status['legacy'] );
+		} else {
+			/* translators: 1: folder path, 2: reason */
+			$message = sprintf( __( 'Backups and quarantined files are stored inside uploads (%1$s) because no private folder outside the web root could be used: %2$s. This server is not Apache or IIS, so the folder\'s deny rules have no effect and anyone who learns its name could download database backups. Define WPCU_DATA_PARENT in wp-config.php as a writable folder outside the web root, or add this rule to the site\'s nginx server block:', 'wp-cleanup' ), $status['path'], $status['reason'] );
+		}
+		echo '<div class="notice notice-warning"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
+	}
+
+	/**
+	 * One line on the Backups tab saying where backups are kept.
+	 */
+	private function render_storage_status() {
+		try {
+			$status = Storage::status();
+		} catch ( \RuntimeException $e ) {
+			return;
+		}
+		$line = $status['outside']
+			/* translators: %s: folder path */
+			? sprintf( __( 'Stored outside the web root in %s.', 'wp-cleanup' ), $status['path'] )
+			/* translators: 1: folder path, 2: reason */
+			: sprintf( __( 'Stored inside uploads in %1$s (no private folder outside the web root: %2$s).', 'wp-cleanup' ), $status['path'], $status['reason'] );
+		echo '<p class="description">' . esc_html( $line ) . '</p>';
 	}
 
 	private function render_notice() {
@@ -1656,6 +1697,7 @@ final class Admin {
 
 	private function render_backups() {
 		$backups = Backup::all();
+		$this->render_storage_status();
 		echo '<p class="description">' . esc_html__( 'Each cleanup writes a backup set first. Restoring replays the saved rows, re-schedules cron events and moves folders back. Items recreated since then are not overwritten.', 'wp-cleanup' ) . '</p>';
 		if ( ! $backups ) {
 			echo '<div class="wpcu-empty"><p>' . esc_html__( 'No backup sets yet.', 'wp-cleanup' ) . '</p></div>';

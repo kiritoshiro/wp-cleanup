@@ -4,9 +4,13 @@
  *
  * Layout: <data dir>/backups/<id>/
  *   manifest.json     what was removed and how each item went
- *   item-<n>.sql      one full SQL statement per line (tables, rows)
+ *   item-<n>.sql.php  one full SQL statement per line (tables, rows), after a
+ *                     first line that makes PHP stop, so the file is empty if
+ *                     it is ever served through PHP (sets from 0.12.1 and
+ *                     earlier have item-<n>.sql without that line; still read)
  *   item-<n>.json     cron events
- *   files/<n>/        quarantined folders (moved, not copied)
+ *   files/<n>/        quarantined folders (moved, not copied), with files a web
+ *                     server could run or obey renamed with DISARM_SUFFIX
  *
  * Values are written as hex literals so any bytes (serialized PHP, binary,
  * odd charsets) round-trip exactly without SQL escaping pitfalls.
@@ -22,6 +26,18 @@ final class Backup {
 
 	const ID_PATTERN   = '/^\d{8}-\d{6}-[a-z0-9]{8}$/';
 	const INSERT_BYTES = 1048576; // Split multi-row INSERTs at ~1 MB to stay under max_allowed_packet.
+
+	/** First line of a SQL file: PHP stops at once and never parses the rest. */
+	const SQL_GUARD = '<?php exit; __halt_compiler(); ?>';
+
+	/**
+	 * Appended to quarantined files a web server could execute or read rules from.
+	 * No dot, so Apache's multi-extension handlers no longer see ".php" either.
+	 */
+	const DISARM_SUFFIX = '-wpcu-disarmed';
+
+	/** Names that run as code or configure the server (PHP, CGI, SSI, ASP/JSP, .htaccess, .user.ini, web.config). */
+	const RUNNABLE = '/(?:\.(?:php\d*|phtml|pht|phar|phps|shtml?|cgi|pl|py|aspx?|jsp)|^\.htaccess|^\.user\.ini|^php\.ini|^web\.config)$/i';
 
 	/** @var string */
 	public $id;
@@ -51,6 +67,21 @@ final class Backup {
 		$root = Storage::path( 'backups' );
 		Storage::ensure_protected_dir( $root );
 		return $root;
+	}
+
+	/**
+	 * Backups roots to read: the current one, then an older one in uploads
+	 * whose sets have not all been moved yet.
+	 *
+	 * @return string[]
+	 */
+	public static function roots() {
+		$roots  = array( self::root() );
+		$legacy = Storage::legacy_dir();
+		if ( $legacy && is_dir( $legacy . '/backups' ) ) {
+			$roots[] = $legacy . '/backups';
+		}
+		return $roots;
 	}
 
 	/**
@@ -86,14 +117,16 @@ final class Backup {
 		if ( ! is_string( $id ) || ! preg_match( self::ID_PATTERN, $id ) ) {
 			return null;
 		}
-		$dir  = self::root() . '/' . $id;
-		$data = is_readable( $dir . '/manifest.json' ) ? json_decode( (string) file_get_contents( $dir . '/manifest.json' ), true ) : null; // phpcs:ignore
-		if ( ! is_array( $data ) ) {
-			return null;
+		foreach ( self::roots() as $root ) {
+			$dir  = $root . '/' . $id;
+			$data = is_readable( $dir . '/manifest.json' ) ? json_decode( (string) file_get_contents( $dir . '/manifest.json' ), true ) : null; // phpcs:ignore
+			if ( is_array( $data ) ) {
+				$backup           = new self( $id, $dir );
+				$backup->manifest = $data;
+				return $backup;
+			}
 		}
-		$backup           = new self( $id, $dir );
-		$backup->manifest = $data;
-		return $backup;
+		return null;
 	}
 
 	/**
@@ -101,14 +134,17 @@ final class Backup {
 	 */
 	public static function all() {
 		$list = array();
-		foreach ( (array) glob( self::root() . '/*', GLOB_ONLYDIR ) as $dir ) {
-			$backup = self::open( basename( $dir ) );
-			if ( $backup ) {
-				$manifest          = $backup->manifest;
-				$manifest['bytes'] = self::tree_bytes( $dir );
-				$list[]            = $manifest;
+		foreach ( self::roots() as $root ) {
+			foreach ( (array) glob( $root . '/*', GLOB_ONLYDIR ) as $dir ) {
+				$backup = isset( $list[ basename( $dir ) ] ) ? null : self::open( basename( $dir ) );
+				if ( $backup ) {
+					$manifest            = $backup->manifest;
+					$manifest['bytes']   = self::tree_bytes( $backup->dir );
+					$list[ $backup->id ] = $manifest;
+				}
 			}
 		}
+		$list = array_values( $list );
 		usort(
 			$list,
 			static function ( $a, $b ) {
@@ -187,7 +223,8 @@ final class Backup {
 	 * @return string SQL file path for a section.
 	 */
 	public function sql_file( $n ) {
-		return $this->dir . '/item-' . (int) $n . '.sql';
+		$legacy = $this->dir . '/item-' . (int) $n . '.sql';
+		return is_file( $legacy ) ? $legacy : $legacy . '.php';
 	}
 
 	/**
@@ -195,7 +232,9 @@ final class Backup {
 	 * @param string $line One SQL statement without newlines.
 	 */
 	public function write_sql( $n, $line ) {
-		if ( false === file_put_contents( $this->sql_file( $n ), $line . "\n", FILE_APPEND | LOCK_EX ) ) { // phpcs:ignore
+		$file = $this->sql_file( $n );
+		$head = file_exists( $file ) ? '' : self::SQL_GUARD . "\n";
+		if ( false === file_put_contents( $file, $head . $line . "\n", FILE_APPEND | LOCK_EX ) ) { // phpcs:ignore
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not write the backup file. Is the disk full?', 'wp-cleanup' ) );
 		}
@@ -281,6 +320,69 @@ final class Backup {
 		$dir = $this->dir . '/files/' . (int) $n;
 		wp_mkdir_p( $dir );
 		return $dir;
+	}
+
+	/**
+	 * Rename every file in a quarantined folder that a web server could run or
+	 * read rules from, so a copy that is ever served is inert. Links are renamed,
+	 * never followed.
+	 *
+	 * @param string $dir Quarantined folder.
+	 * @return int Files that could not be renamed.
+	 */
+	public static function disarm_tree( $dir ) {
+		$failed = 0;
+		foreach ( self::tree_files( $dir ) as $path ) {
+			if ( preg_match( self::RUNNABLE, basename( $path ) ) && ! @rename( $path, $path . self::DISARM_SUFFIX ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Counted.
+				++$failed;
+			}
+		}
+		return $failed;
+	}
+
+	/**
+	 * Undo disarm_tree(). Folders quarantined by older versions have nothing to undo.
+	 *
+	 * @param string $dir Quarantined folder.
+	 * @return int Files that could not be renamed back.
+	 */
+	public static function rearm_tree( $dir ) {
+		$failed = 0;
+		$length = strlen( self::DISARM_SUFFIX );
+		foreach ( self::tree_files( $dir ) as $path ) {
+			$original = substr( $path, 0, -$length );
+			if ( substr( $path, -$length ) !== self::DISARM_SUFFIX || ! preg_match( self::RUNNABLE, basename( $original ) ) ) {
+				continue;
+			}
+			if ( file_exists( $original ) || is_link( $original ) || ! @rename( $path, $original ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Counted.
+				++$failed;
+			}
+		}
+		return $failed;
+	}
+
+	/**
+	 * Files and links in a folder tree, without descending into linked folders.
+	 *
+	 * @param string $dir Folder.
+	 * @return string[]
+	 */
+	private static function tree_files( $dir ) {
+		$files = array();
+		if ( ! is_dir( $dir ) || is_link( $dir ) ) {
+			return $files;
+		}
+		try {
+			$tree = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $dir, \FilesystemIterator::SKIP_DOTS ) );
+			foreach ( $tree as $entry ) {
+				if ( $entry->isLink() || ! $entry->isDir() ) {
+					$files[] = $entry->getPathname();
+				}
+			}
+		} catch ( \UnexpectedValueException $e ) {
+			unset( $e ); // An unreadable subfolder; what was listed is still handled.
+		}
+		return $files;
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -582,7 +684,13 @@ final class Backup {
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'A folder with that name exists again; not overwriting it.', 'wp-cleanup' ) );
 				}
+				if ( self::rearm_tree( $source ) ) {
+					self::disarm_tree( $source );
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
+					throw new \RuntimeException( __( 'Could not rename the quarantined script files back; the folder was not moved.', 'wp-cleanup' ) );
+				}
 				if ( ! @rename( $source, $target ) ) { // phpcs:ignore
+					self::disarm_tree( $source );
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 					throw new \RuntimeException( __( 'Could not move the folder back.', 'wp-cleanup' ) );
 				}
@@ -633,7 +741,7 @@ final class Backup {
 		$errors = 0;
 		while ( false !== ( $line = fgets( $handle ) ) ) { // phpcs:ignore
 			$line = rtrim( $line, "\r\n" );
-			if ( '' === $line ) {
+			if ( '' === $line || self::SQL_GUARD === $line ) {
 				continue;
 			}
 			++$lines;
