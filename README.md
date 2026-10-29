@@ -168,23 +168,25 @@ An exact reference in any of these forms beats a match on a prefix alone. Core n
 
 ### Where backups are stored
 
-The private folder is `wp-cleanup-<16 hex characters>` (derived from the WordPress path and the site's auth salt, so it is not guessable but every request agrees on it), created next to the WordPress folder (the parent of `ABSPATH`), with permissions 0700. On a typical host that is outside the web root: `/home/user/wp-cleanup-…` beside `/home/user/public_html`. It is used only when the parent folder:
+The private folder is `wp-cleanup-<16 hex characters>` (derived from the WordPress path and the site's auth salt, so it is not guessable but every request agrees on it), created next to the WordPress folder (the parent of `ABSPATH`), with permissions 0700 (restored to 0700 whenever it is reused; the admin page warns if that fails). On a typical host that is outside the web root: `/home/user/wp-cleanup-…` beside `/home/user/public_html`. It is used only when the parent folder:
 - is writable;
 - is on the same filesystem as `wp-content` and uploads (folders are moved with `rename()`);
 - is not inside the WordPress folder, `wp-content`, uploads or the web server's document root;
-- has no `index.php`, `index.html`, `wp-load.php` or `wp-settings.php` (signs of a web root, for WP-CLI where the document root is unknown).
+- has no `index.php`, `index.html`, `index.htm`, `wp-load.php` or `wp-settings.php`, and neither has any folder above it (signs of a web root, needed under WP-CLI where the document root is unknown). A folder recorded from WP-CLI that a web request later finds inside the document root is still read, but reported as not private.
 
-Set another parent folder with `define( 'WPCU_DATA_PARENT', '/home/user/private' );` in `wp-config.php` (the web-root guesses are then skipped), or with the `wp_cleanup_data_parent` filter from a must-use plugin. Return `''` from the filter to keep the data in uploads. The folder holds an `owner.txt` with the WordPress path, so a copy of the database at another path (a staging site) makes its own folder instead of using or deleting the original's.
+Set another parent folder with `define( 'WPCU_DATA_PARENT', '/home/user/private' );` in `wp-config.php`, or with the `wp_cleanup_data_parent` filter from a must-use plugin. The same checks apply to it: it chooses the parent, it does not turn off the web-root boundary. Return `''` from the filter to keep the data in uploads.
 
-If no parent folder can be used, the data stays in uploads as before: a folder with a random name and deny rules that only Apache, LiteSpeed and IIS read. On any other server (nginx) *Tools → WP Cleanup* then shows a warning with the reason and an nginx rule for the server block, for example:
+Every data folder, including one in uploads, holds an `owner.txt` with the WordPress path. A copy of the database at another path (a staging site, even one sharing the uploads folder) makes its own folder instead of using or deleting the original's, and uninstall deletes only folders marked as this site's. A folder in uploads from 0.12.1 or earlier has no marker; it is claimed when this site first uses it, and uninstall leaves it alone until then. Scans always show any `wp-cleanup-…` folder in uploads as WP Cleanup data, never as deletable.
+
+If no parent folder can be used, the data stays in uploads as before: a folder with a random name and deny rules that only Apache, LiteSpeed and IIS read. On any other server (nginx), **new cleanups, image conversions and repairs are refused** until either a private folder can be used or the site owner confirms a server rule. *Tools → WP Cleanup* shows the reason and the rule for the server block, for example:
 
 ```nginx
 location ^~ /wp-content/uploads/wp-cleanup-abcdefgh12345678/ { deny all; }
 ```
 
-`^~` makes the rule win over the PHP location, so nothing in the folder is served or run. The *Backups* tab always says where backups are stored.
+`^~` makes the rule win over the PHP location, so nothing in the folder is served or run. After adding it and reloading nginx, confirm it with `define( 'WPCU_UPLOADS_DENY_CONFIRMED', true );` in `wp-config.php` (or the `wp_cleanup_uploads_deny_confirmed` filter). Existing backups can always be restored and deleted. WP-CLI cannot tell which web server runs the site, so in this fallback it also needs the confirmation. The *Backups* tab always says where backups are stored.
 
-**Upgrading from 0.12.1 or earlier:** the old folder in uploads is moved over one backup set at a time. Sets that changed within the last hour are left until they are idle, so an image batch or a long table backup still writing into one is not cut off. Until then they are listed, restored and deleted from where they are, and the warning above names the old folder on nginx. Scan results and caches move straight away. The old folder is removed once only its guard files remain. Old SQL files keep their `.sql` name and old quarantined folders have nothing to rename back; both restore as before.
+**Upgrading from 0.12.1 or earlier:** the old folder in uploads is moved over one backup set at a time. Every request that writes, restores or deletes a set holds a shared lock on it (a `.<id>.lock` file beside the set), and a set is moved only under an exclusive lock taken without waiting, so a running backup, restore, delete or quarantine is never cut off; such a set is left for a later request. Until then sets are listed, restored and deleted from where they are, and on nginx the admin page names the old folder with its rule. Scan results and caches move straight away. The old folder is removed once only its guard files, owner marker and lock files remain. Old SQL files keep their `.sql` name and old quarantined folders have nothing to rename back; both restore as before.
 
 ## Using it
 
@@ -207,6 +209,7 @@ wp cleanup delete-backup <backup-id> --yes
 - `wp_cleanup_signatures` adds your own plugin prefixes.
 - `wp_cleanup_index_max_files` changes the per-source file limit (default 40,000).
 - `wp_cleanup_data_parent` picks the folder that holds the private data folder (see [Where backups are stored](#where-backups-are-stored)).
+- `wp_cleanup_uploads_deny_confirmed` confirms a server rule that denies the data folder in uploads (default: `WPCU_UPLOADS_DENY_CONFIRMED`).
 
 ## Development
 
@@ -263,7 +266,7 @@ The suite covers:
 ## Known limits (v0.1)
 
 - Single-site only.
-- When no folder outside the web root can be used and the server is nginx, backups in uploads are protected only by their random folder name until the rule shown on the admin page is added. SQL files there give an empty answer only if nginx passes `.php` to PHP; JSON files (manifests, cron events, scan results) are plain text.
+- When no folder outside the web root can be used and the server is nginx, new backups are refused until the rule shown on the admin page is confirmed. The confirmation is the site owner's word; the plugin does not test the rule. Scan results and caches (`last-scan.json`, `media-scan.json`, the code index) are still written to that folder before confirmation.
 - Moving the site to another path, or changing `WPCU_DATA_PARENT`, starts a new private folder. Move the old folder's `backups/` contents over by hand to keep its sets.
 - Names built entirely at runtime (with no literal prefix, field name, class name or folder name in the code) can't be traced back to their plugin. They show as "unknown owner", never as "orphaned".
 - Very large tables are copied into the backup inside one request. Use WP-CLI for those.

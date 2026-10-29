@@ -447,7 +447,9 @@ final class Admin {
 	}
 
 	/**
-	 * Warn when backups sit in uploads on a server that ignores .htaccess/web.config (nginx).
+	 * Warn when backup data can be served: kept in uploads on a server that ignores
+	 * .htaccess/web.config (nginx). New backups are then refused until the owner
+	 * moves the data or confirms a server rule.
 	 */
 	private function render_storage_notice() {
 		try {
@@ -456,17 +458,19 @@ final class Admin {
 			echo '<div class="notice notice-error"><p>' . esc_html( $e->getMessage() ) . '</p></div>';
 			return;
 		}
-		if ( $status['server_denies'] || '' === $status['nginx_rule'] ) {
-			return;
-		}
-		if ( $status['outside'] ) {
-			/* translators: %s: folder path */
-			$message = sprintf( __( 'Older backup sets are still in a folder inside uploads (%s). They move to the private folder outside the web root once they have not been used for an hour. Until then, this server (not Apache or IIS) ignores the folder\'s deny rules.', 'wp-cleanup' ), $status['legacy'] );
-		} else {
+		if ( $status['blocked'] ) {
 			/* translators: 1: folder path, 2: reason */
-			$message = sprintf( __( 'Backups and quarantined files are stored inside uploads (%1$s) because no private folder outside the web root could be used: %2$s. This server is not Apache or IIS, so the folder\'s deny rules have no effect and anyone who learns its name could download database backups. Define WPCU_DATA_PARENT in wp-config.php as a writable folder outside the web root, or add this rule to the site\'s nginx server block:', 'wp-cleanup' ), $status['path'], $status['reason'] );
+			$message = sprintf( __( 'Cleanups, image conversions and repairs are turned off: they would write backups (database rows and removed files) to %1$s, a folder the web server can reach, because no private folder outside the web root could be used (%2$s). This server is not Apache or IIS, so the deny rules in that folder have no effect. Existing backups can still be restored and deleted. To turn cleanups back on, define WPCU_DATA_PARENT in wp-config.php as a writable folder outside the web root, or add this rule to the nginx server block of the site, reload nginx, and then add define( \'WPCU_UPLOADS_DENY_CONFIRMED\', true ); to wp-config.php:', 'wp-cleanup' ), $status['path'], $status['reason'] );
+			echo '<div class="notice notice-error"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
+		} elseif ( $status['outside'] && $status['legacy'] && ! $status['server_denies'] && ! $status['confirmed'] ) {
+			/* translators: %s: folder path */
+			$message = sprintf( __( 'Older backup sets are still in a folder inside uploads (%s), which this server (not Apache or IIS) does not protect. Each set moves to the private folder outside the web root as soon as no request is using it; reload this page. If one stays, add this rule to the nginx server block of the site:', 'wp-cleanup' ), $status['legacy'] );
+			echo '<div class="notice notice-warning"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
 		}
-		echo '<div class="notice notice-warning"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
+		if ( ! $status['mode_ok'] ) {
+			/* translators: %s: folder path */
+			echo '<div class="notice notice-warning"><p>' . esc_html( sprintf( __( 'The private folder %s could not be restricted to its owner (mode 0700). Other accounts on this server may be able to read the backups.', 'wp-cleanup' ), $status['path'] ) ) . '</p></div>';
+		}
 	}
 
 	/**
@@ -478,11 +482,16 @@ final class Admin {
 		} catch ( \RuntimeException $e ) {
 			return;
 		}
-		$line = $status['outside']
+		if ( $status['outside'] ) {
 			/* translators: %s: folder path */
-			? sprintf( __( 'Stored outside the web root in %s.', 'wp-cleanup' ), $status['path'] )
+			$line = sprintf( __( 'Stored outside the web root in %s.', 'wp-cleanup' ), $status['path'] );
+		} else {
 			/* translators: 1: folder path, 2: reason */
-			: sprintf( __( 'Stored inside uploads in %1$s (no private folder outside the web root: %2$s).', 'wp-cleanup' ), $status['path'], $status['reason'] );
+			$line = sprintf( __( 'Stored in a folder the web server can reach, %1$s (no private folder outside the web root: %2$s).', 'wp-cleanup' ), $status['path'], $status['reason'] );
+			if ( $status['confirmed'] && ! $status['server_denies'] ) {
+				$line .= ' ' . __( 'A server rule denying it is confirmed in wp-config.php.', 'wp-cleanup' );
+			}
+		}
 		echo '<p class="description">' . esc_html( $line ) . '</p>';
 	}
 
@@ -728,7 +737,12 @@ final class Admin {
 			$this->notice( 'info', __( 'No image problems to repair.', 'wp-cleanup' ) );
 			$this->back( array( 'tab' => 'images' ) );
 		}
-		$backup  = Backup::start();
+		try {
+			$backup = Backup::start();
+		} catch ( \RuntimeException $e ) {
+			$this->notice( 'error', $e->getMessage() );
+			$this->back( array( 'tab' => 'images' ) );
+		}
 		$details = array();
 		$fixed   = 0;
 		$failed  = 0;

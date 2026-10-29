@@ -535,7 +535,7 @@ final class Scanner {
 					$class = $this->core( __( 'Year-based media folder.', 'wp-cleanup' ) );
 				} elseif ( in_array( $entry, $core_dirs, true ) ) {
 					$class = $this->core();
-				} elseif ( $ours && $entry === $ours ) {
+				} elseif ( ( $ours && $entry === $ours ) || ( 'uploads' === $root_key && preg_match( Storage::NAME_PATTERN, $entry ) ) ) { // Ours, or another install's sharing uploads: never offered for deletion.
 					$class = array(
 						'status'     => Plugin::STATUS_IN_USE,
 						'owner'      => 'WP Cleanup',

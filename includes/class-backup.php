@@ -51,6 +51,9 @@ final class Backup {
 	/** @var array<string,array> Column info cache per table. */
 	private static $columns = array();
 
+	/** @var resource|false|null Shared lock on this set, held while this object lives (see Storage::lock_set()). */
+	private $lock = null;
+
 	/**
 	 * @param string $id  Backup id.
 	 * @param string $dir Absolute directory.
@@ -58,6 +61,18 @@ final class Backup {
 	private function __construct( $id, $dir ) {
 		$this->id  = $id;
 		$this->dir = $dir;
+	}
+
+	public function __destruct() {
+		$this->unlock();
+	}
+
+	private function unlock() {
+		if ( is_resource( $this->lock ) ) {
+			flock( $this->lock, LOCK_UN );
+			fclose( $this->lock ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		}
+		$this->lock = null;
 	}
 
 	/**
@@ -90,11 +105,13 @@ final class Backup {
 	 * @return self
 	 */
 	public static function start() {
+		Storage::assert_safe_for_backups();
 		$id  = gmdate( 'Ymd-His' ) . '-' . strtolower( wp_generate_password( 8, false, false ) );
 		$dir = self::root() . '/' . $id;
 		Storage::ensure_protected_dir( $dir );
 		$user           = wp_get_current_user();
 		$backup         = new self( $id, $dir );
+		$backup->lock   = Storage::lock_set( $dir, false );
 		$backup->manifest = array(
 			'id'             => $id,
 			'created'        => time(),
@@ -117,13 +134,25 @@ final class Backup {
 		if ( ! is_string( $id ) || ! preg_match( self::ID_PATTERN, $id ) ) {
 			return null;
 		}
-		foreach ( self::roots() as $root ) {
-			$dir  = $root . '/' . $id;
-			$data = is_readable( $dir . '/manifest.json' ) ? json_decode( (string) file_get_contents( $dir . '/manifest.json' ), true ) : null; // phpcs:ignore
-			if ( is_array( $data ) ) {
-				$backup           = new self( $id, $dir );
-				$backup->manifest = $data;
-				return $backup;
+		// Twice: a set moved out of uploads while we waited for its lock is found in its new place.
+		for ( $try = 0; $try < 2; $try++ ) {
+			foreach ( self::roots() as $root ) {
+				$dir = $root . '/' . $id;
+				if ( ! is_readable( $dir . '/manifest.json' ) ) {
+					continue;
+				}
+				$lock = Storage::lock_set( $dir, false );
+				clearstatcache();
+				$data = is_readable( $dir . '/manifest.json' ) ? json_decode( (string) file_get_contents( $dir . '/manifest.json' ), true ) : null; // phpcs:ignore
+				if ( is_array( $data ) ) {
+					$backup           = new self( $id, $dir );
+					$backup->manifest = $data;
+					$backup->lock     = $lock;
+					return $backup;
+				}
+				if ( is_resource( $lock ) ) {
+					fclose( $lock ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+				}
 			}
 		}
 		return null;
@@ -762,7 +791,12 @@ final class Backup {
 	 * Permanently delete this backup set.
 	 */
 	public function delete() {
-		return Storage::delete_tree( $this->dir );
+		$ok = Storage::delete_tree( $this->dir );
+		$this->unlock();
+		if ( $ok ) {
+			@unlink( Storage::lock_file( $this->dir ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Lock file of a deleted set.
+		}
+		return $ok;
 	}
 
 	/* ------------------------------------------------------------------ */
