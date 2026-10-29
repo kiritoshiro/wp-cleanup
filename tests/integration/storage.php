@@ -108,7 +108,11 @@ $doc_root     = $_SERVER['DOCUMENT_ROOT'] ?? null;
 
 $reset = static function () use ( $test_parent, $test_doc, $parent_of_wp, $updir, $opt_old, $opt_new, $opt_fresh, $set_parent, $server, $doc_root ) {
 	remove_filter( 'wp_cleanup_data_parent', $set_parent );
-	remove_all_filters( 'wp_cleanup_uploads_deny_confirmed' );
+	foreach ( array( 'wp_cleanup_uploads_deny_confirmed', 'wp_cleanup_cli_context', 'wp_cleanup_private_mode_ok', 'wp_cleanup_claim_data_dir' ) as $hook ) {
+		remove_all_filters( $hook );
+	}
+	delete_option( Storage::OPTION_UNCLAIMED );
+	@unlink( $updir . '/zzwpcust-orphan.png' );
 	list( $GLOBALS['is_apache'], $GLOBALS['is_IIS'], $GLOBALS['is_iis7'], $GLOBALS['is_nginx'] ) = $server;
 	if ( null === $doc_root ) {
 		unset( $_SERVER['DOCUMENT_ROOT'] );
@@ -304,11 +308,46 @@ wpst_ok( Storage::status()['blocked'], 'confirmation withdrawn: blocked again' )
 $kept = Backup::open( $kept_id );
 $res  = $kept ? $kept->restore() : array();
 wp_cache_flush();
+$items   = $kept ? count( $kept->manifest['items'] ) : -1;
+$refused = '';
+try {
+	$kept->add_item( array( 'type' => 'option', 'id' => 'zzwpcust_more', 'label' => 'zzwpcust_more', 'status' => 'orphaned', 'owner' => '', 'count' => 1, 'bytes' => 1 ) );
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+$again = Backup::open( $kept_id );
+wpst_ok( false !== strpos( $refused, 'Refused' ) && $again && count( $again->manifest['items'] ) === $items, 'existing set in blocked storage: a new item is refused, manifest unchanged' );
+unset( $again );
+file_put_contents( $updir . '/zzwpcust-orphan.png', "\x89PNG\r\n" );
+$refused = '';
+try {
+	WPCleanup\Media_Orphan_Files::remove( 'zzwpcust-orphan.png', $kept, array( 'unregistered' => array( array( 'path' => 'zzwpcust-orphan.png' ) ) ) );
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+wpst_ok( false !== strpos( $refused, 'Refused' ) && is_file( $updir . '/zzwpcust-orphan.png' ) && ! is_dir( $kept->dir . '/files' ), 'batch with an existing set id: refused before the file is moved' );
+unlink( $updir . '/zzwpcust-orphan.png' );
 wpst_ok( $res && $res[0]['ok'] && $value === get_option( $opt_fresh ) && $kept->delete(), 'while blocked, an existing set still opens, restores and deletes' );
 unset( $kept );
 delete_option( $opt_fresh );
+
+// WP-CLI never knows which server serves the site; web requests on Apache, LiteSpeed or IIS do.
 wpst_nginx( false );
-wpst_ok( ! Storage::status()['blocked'] && Storage::status()['server_denies'], 'Apache: the folder\'s .htaccess counts; not blocked' );
+wpst_ok( ! Storage::server_denies() && Storage::status()['blocked'], 'WP-CLI with inherited Apache globals: still needs the confirmation' );
+add_filter( 'wp_cleanup_cli_context', '__return_false' );
+wpst_ok( Storage::server_denies() && ! Storage::status()['blocked'], 'web request on Apache: the folder\'s .htaccess counts; not blocked' );
+wpst_nginx( true );
+$software                   = $_SERVER['SERVER_SOFTWARE'] ?? null;
+$_SERVER['SERVER_SOFTWARE'] = 'LiteSpeed';
+wpst_ok( Storage::server_denies() && ! Storage::status()['blocked'], 'web request on LiteSpeed: .htaccess counts too' );
+$_SERVER['SERVER_SOFTWARE'] = 'nginx/1.26.0';
+wpst_ok( ! Storage::server_denies() && Storage::status()['blocked'], 'web request on nginx: blocked' );
+if ( null === $software ) {
+	unset( $_SERVER['SERVER_SOFTWARE'] );
+} else {
+	$_SERVER['SERVER_SOFTWARE'] = $software;
+}
+remove_all_filters( 'wp_cleanup_cli_context' );
 list( $GLOBALS['is_apache'], $GLOBALS['is_IIS'], $GLOBALS['is_iis7'], $GLOBALS['is_nginx'] ) = $server;
 
 // A recorded private folder that the web server turns out to serve (made from WP-CLI, where the document root is unknown).
@@ -327,6 +366,34 @@ if ( null === $doc_root ) {
 }
 Storage::reset();
 wpst_ok( get_option( Storage::OPTION_PATH ) === $dir && Storage::status()['outside'], 'fallbacks keep the recorded private folder' );
+
+// A private folder whose mode cannot be repaired to 0700 receives no new data.
+$parent = null;
+$kept   = wpst_option_set( $opt_fresh, $value );
+add_filter( 'wp_cleanup_private_mode_ok', '__return_false' );
+Storage::reset();
+$st      = Storage::status();
+$refused = '';
+try {
+	Backup::start();
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+wpst_ok( $st['outside'] && ! $st['mode_ok'] && $st['blocked'] && false !== strpos( $refused, '0700' ), 'failed 0700 repair: new sets refused (also under WP-CLI): ' . substr( $refused, 0, 60 ) );
+$refused = '';
+try {
+	$kept->add_item( array( 'type' => 'option', 'id' => 'zzwpcust_more', 'label' => 'zzwpcust_more', 'status' => 'orphaned', 'owner' => '', 'count' => 1, 'bytes' => 1 ) );
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+$res = $kept->restore();
+wp_cache_flush();
+wpst_ok( false !== strpos( $refused, '0700' ) && $res && $res[0]['ok'] && $value === get_option( $opt_fresh ) && $kept->delete(), 'failed 0700 repair: appending refused; restore and delete still work' );
+unset( $kept );
+delete_option( $opt_fresh );
+remove_all_filters( 'wp_cleanup_private_mode_ok' );
+Storage::reset();
+wpst_ok( ! Storage::status()['blocked'], 'mode fixed: not blocked' );
 
 /* ---------------------------------------------------------------------- */
 WP_CLI::log( '4. Folders quarantined into a backup set: script files disarmed and restored' );
@@ -414,6 +481,13 @@ wpst_ok( is_dir( $dir . '/backups/' . $old_id ) && ! is_dir( $legacy . '/backups
 wpst_ok( is_dir( $legacy . '/backups/' . $new_id ) && ! is_dir( $dir . '/backups/' . $new_id ), 'set whose lock another request holds is left in place' );
 wpst_ok( is_file( $legacy . '/owner.txt' ), 'the unmarked old folder was claimed with this site\'s marker' );
 wpst_ok( is_file( $dir . '/wpcu-st-cache.json' ) && ! file_exists( $legacy . '/wpcu-st-cache.json' ) && array( 'x' => 1 ) === Storage::read_json( 'wpcu-st-cache.json' ), 'scan results and caches moved' );
+$refused = '';
+try {
+	$busy->add_item( array( 'type' => 'option', 'id' => 'zzwpcust_more', 'label' => 'zzwpcust_more', 'status' => 'orphaned', 'owner' => '', 'count' => 1, 'bytes' => 1 ) );
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+wpst_ok( false !== strpos( $refused, 'Refused' ), 'a set still in uploads takes no new items (WP-CLI, no confirmation)' );
 $res = $busy ? $busy->restore() : array();
 wp_cache_flush();
 wpst_ok( $res && $res[0]['ok'] && $value === get_option( $opt_new ) && is_file( $busy->dir . '/manifest.json' ), 'the locked set restores in place, its state saved where it is' );
@@ -421,7 +495,7 @@ unset( $busy );
 $ids = wp_list_pluck( Backup::all(), 'id' );
 wpst_ok( in_array( $old_id, $ids, true ) && in_array( $new_id, $ids, true ) && 2 === count( $ids ), 'Backups list shows sets from both places' );
 $st = Storage::status();
-wpst_ok( $st['outside'] && wp_normalize_path( (string) $st['legacy'] ) === $legacy && false !== strpos( $st['nginx_rule'], basename( $legacy ) ), 'status reports the folder still in uploads, with its nginx rule' );
+wpst_ok( $st['outside'] && array( $legacy ) === array_map( 'wp_normalize_path', $st['legacy'] ) && false !== strpos( $st['nginx_rule'], basename( $legacy ) ), 'status reports the folder still in uploads, with its nginx rule' );
 $scanned = ( new WPCleanup\Scanner() )->scan( array( 'file' ) );
 $ours    = array_values( array_filter( $scanned['items'], static function ( $i ) use ( $legacy ) {
 	return 'uploads/' . basename( $legacy ) === $i['id'];
@@ -440,11 +514,50 @@ unset( $left );
 Storage::reset();
 Storage::dir();
 wpst_ok( is_dir( $dir . '/backups/' . $new_id ) && ! file_exists( $legacy ), 'once its lock is free the last set moves and the folder in uploads is removed' );
-wpst_ok( false === get_option( Storage::OPTION_DIR ) && null === Storage::status()['legacy'] && '' === Storage::status()['nginx_rule'], 'option cleared; no warning left' );
+wpst_ok( false === get_option( Storage::OPTION_DIR ) && array() === Storage::status()['legacy'] && '' === Storage::status()['nginx_rule'], 'option cleared; no warning left' );
 $moved = Backup::open( $new_id );
 wpst_ok( $moved && ! empty( $moved->manifest['restored'] ) && $moved->delete() && ! is_dir( $dir . '/backups/' . $new_id ) && ! file_exists( Storage::lock_file( $dir . '/backups/' . $new_id ) ), 'moved set keeps its restore state; deleting it removes its lock file too' );
 unset( $moved );
 Backup::open( $old_id )->delete();
+
+/* ---------------------------------------------------------------------- */
+WP_CLI::log( '6. Unmarked folder in shared uploads holding another site\'s backups' );
+/* ---------------------------------------------------------------------- */
+
+$reset();
+$shared = $updir . '/wp-cleanup-3333333333333333';
+$set_id = '20260101-000000-abcdefgh';
+wp_mkdir_p( $shared . '/backups/' . $set_id );
+file_put_contents( $shared . '/backups/' . $set_id . '/manifest.json', wp_json_encode( array( 'id' => $set_id, 'created' => 1, 'site' => 'https://production.example', 'items' => array(), 'restored' => null ) ) );
+file_put_contents( $shared . '/last-scan.json', '{}' );
+$plain_manifest = file_get_contents( $shared . '/backups/' . $set_id . '/manifest.json' );
+update_option( Storage::OPTION_DIR, basename( $shared ), false ); // Copied from production's database.
+Storage::reset();
+$st = Storage::status();
+wpst_ok( $st['outside'] && array() === $st['legacy'] && wp_normalize_path( (string) $st['unclaimed'] ) === $shared, 'private folder used; the shared folder is reported unclaimed, not as ours' );
+wpst_ok( ! file_exists( $shared . '/owner.txt' ) && is_dir( $shared . '/backups/' . $set_id ) && is_file( $shared . '/last-scan.json' ) && ! is_dir( wp_normalize_path( $st['path'] ) . '/backups/' . $set_id ), 'not claimed, and none of its sets or caches moved' );
+wpst_ok( null === Backup::open( $set_id ) && ! in_array( $set_id, wp_list_pluck( Backup::all(), 'id' ), true ), 'its sets are not listed or opened' );
+wpst_ok( false === get_option( Storage::OPTION_DIR ) && basename( $shared ) === get_option( Storage::OPTION_UNCLAIMED ), 'option moved to the unclaimed record' );
+Storage::delete_all();
+wpst_ok( is_dir( $shared . '/backups/' . $set_id ) && $plain_manifest === file_get_contents( $shared . '/backups/' . $set_id . '/manifest.json' ), 'uninstall leaves it untouched' );
+// Fallback storage: the copied option points at it, so a new folder is made instead.
+update_option( Storage::OPTION_DIR, basename( $shared ), false );
+add_filter( 'wp_cleanup_data_parent', '__return_empty_string' );
+Storage::reset();
+$own = wp_normalize_path( Storage::dir() );
+wpst_ok( $own !== $shared && is_file( $own . '/owner.txt' ) && ! file_exists( $shared . '/owner.txt' ), 'fallback: a new marked folder is used; the shared one stays unclaimed' );
+remove_all_filters( 'wp_cleanup_data_parent' );
+// Explicit claim by the site owner (e.g. the site's address changed).
+add_filter( 'wp_cleanup_claim_data_dir', static function () use ( $shared ) {
+	return basename( $shared );
+} );
+Storage::reset();
+$st = Storage::status();
+$private = wp_normalize_path( $st['path'] );
+wpst_ok( null === $st['unclaimed'] && is_dir( $private . '/backups/' . $set_id ) && ! file_exists( $shared ) && false === get_option( Storage::OPTION_UNCLAIMED ), 'WPCU_CLAIM_DATA_DIR claims it; its sets move to the private folder' );
+$claimed = Backup::open( $set_id );
+wpst_ok( $claimed && $claimed->delete(), 'claimed set opens and deletes' );
+unset( $claimed );
 
 /* ---------------------------------------------------------------------- */
 /* Teardown                                                               */

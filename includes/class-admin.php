@@ -458,18 +458,22 @@ final class Admin {
 			echo '<div class="notice notice-error"><p>' . esc_html( $e->getMessage() ) . '</p></div>';
 			return;
 		}
-		if ( $status['blocked'] ) {
+		if ( $status['blocked'] && ! $status['mode_ok'] ) {
+			/* translators: %s: folder path */
+			echo '<div class="notice notice-error"><p>' . esc_html( sprintf( __( 'Cleanups, image conversions and repairs are turned off: the private folder %s could not be restricted to its owner (mode 0700), so other accounts on this server could read new backups. Fix its permissions (chmod 700). Existing backups can still be restored and deleted.', 'wp-cleanup' ), $status['path'] ) ) . '</p></div>';
+		} elseif ( $status['blocked'] ) {
 			/* translators: 1: folder path, 2: reason */
 			$message = sprintf( __( 'Cleanups, image conversions and repairs are turned off: they would write backups (database rows and removed files) to %1$s, a folder the web server can reach, because no private folder outside the web root could be used (%2$s). This server is not Apache or IIS, so the deny rules in that folder have no effect. Existing backups can still be restored and deleted. To turn cleanups back on, define WPCU_DATA_PARENT in wp-config.php as a writable folder outside the web root, or add this rule to the nginx server block of the site, reload nginx, and then add define( \'WPCU_UPLOADS_DENY_CONFIRMED\', true ); to wp-config.php:', 'wp-cleanup' ), $status['path'], $status['reason'] );
 			echo '<div class="notice notice-error"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
 		} elseif ( $status['outside'] && $status['legacy'] && ! $status['server_denies'] && ! $status['confirmed'] ) {
-			/* translators: %s: folder path */
-			$message = sprintf( __( 'Older backup sets are still in a folder inside uploads (%s), which this server (not Apache or IIS) does not protect. Each set moves to the private folder outside the web root as soon as no request is using it; reload this page. If one stays, add this rule to the nginx server block of the site:', 'wp-cleanup' ), $status['legacy'] );
+			/* translators: %s: folder paths */
+			$message = sprintf( __( 'Older backup sets are still in a folder inside uploads (%s), which this server is not known to protect. Each set moves to the private folder outside the web root as soon as no request is using it; reload this page. If one stays, add this rule to the nginx server block of the site:', 'wp-cleanup' ), implode( ', ', $status['legacy'] ) );
 			echo '<div class="notice notice-warning"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( $status['nginx_rule'] ) . '</code></pre></div>';
 		}
-		if ( ! $status['mode_ok'] ) {
-			/* translators: %s: folder path */
-			echo '<div class="notice notice-warning"><p>' . esc_html( sprintf( __( 'The private folder %s could not be restricted to its owner (mode 0700). Other accounts on this server may be able to read the backups.', 'wp-cleanup' ), $status['path'] ) ) . '</p></div>';
+		if ( $status['unclaimed'] ) {
+			/* translators: 1: folder path, 2: folder name */
+			$message = sprintf( __( 'An older WP Cleanup folder in uploads (%1$s) has no owner marker, and its backups name another site address, so it may belong to another site that shares this uploads folder (for example production, seen from a staging copy). It is left alone: not listed, moved or deleted. If it belongs to this site (for example after a change of domain), add define( \'WPCU_CLAIM_DATA_DIR\', \'%2$s\' ); to wp-config.php. Either way, it can be served by the web server unless a rule denies it:', 'wp-cleanup' ), $status['unclaimed'], basename( $status['unclaimed'] ) );
+			echo '<div class="notice notice-warning"><p>' . esc_html( $message ) . '</p><pre><code>' . esc_html( Storage::nginx_rule( $status['unclaimed'] ) ) . '</code></pre></div>';
 		}
 	}
 
@@ -858,6 +862,7 @@ final class Admin {
 			if ( ! $backup || $backup->manifest['site'] !== home_url() || $backup->manifest['user'] !== wp_get_current_user()->user_login || ! empty( $backup->manifest['restored'] ) ) {
 				wp_send_json_error( array( 'message' => __( 'This backup set cannot accept more images.', 'wp-cleanup' ) ), 400 );
 			}
+			$backup->assert_writable(); // Before anything changes; the set may sit where new data must not go.
 			if ( in_array( $kind, array( 'image', 'duplicate' ), true ) ) {
 				$id = isset( $_POST['id'] ) ? absint( wp_unslash( $_POST['id'] ) ) : 0;
 				if ( ! $id ) {
@@ -911,6 +916,7 @@ final class Admin {
 			if ( ! $backup || $backup->manifest['site'] !== home_url() || $backup->manifest['user'] !== wp_get_current_user()->user_login || ! empty( $backup->manifest['restored'] ) ) {
 				wp_send_json_error( array( 'message' => __( 'This backup set cannot accept more images.', 'wp-cleanup' ) ), 400 );
 			}
+			$backup->assert_writable(); // Before anything changes; the set may sit where new data must not go.
 			Media_Merger::merge( $drop, $keep, $backup, ! empty( $_POST['identical'] ) );
 		} catch ( \Exception $e ) {
 			wp_send_json_error( array( 'message' => $e->getMessage() ), 400 );
@@ -1016,6 +1022,7 @@ final class Admin {
 				if ( ! $backup ) {
 					throw new \RuntimeException( __( 'Backup set not found.', 'wp-cleanup' ) );
 				}
+				$backup->assert_writable();
 				$check['backup'] = $backup->id;
 			}
 			wp_send_json_success( $check );
@@ -1044,6 +1051,7 @@ final class Admin {
 			if ( ! $backup ) {
 				throw new \RuntimeException( __( 'Backup set not found.', 'wp-cleanup' ) );
 			}
+			$backup->assert_writable();
 			$results = array();
 			foreach ( $ids as $id ) {
 				$results[] = Media_Converter::convert( $id, $backup, false, $gap );

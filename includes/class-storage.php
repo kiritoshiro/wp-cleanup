@@ -33,6 +33,9 @@ final class Storage {
 	/** Absolute path of the folder outside the web root. */
 	const OPTION_PATH = 'wpcu_data_path';
 
+	/** Name of a folder in uploads without an owner marker whose backups name another site (left alone until claimed). */
+	const OPTION_UNCLAIMED = 'wpcu_data_dir_unclaimed';
+
 	const NAME_PATTERN = '/^wp-cleanup-[a-z0-9]{16}$/';
 	const SET_PATTERN  = '/^\d{8}-\d{6}-[a-z0-9]{8}$/'; // Same as Backup::ID_PATTERN; uninstall loads only this class.
 	const LOCK_PATTERN = '/^\.\d{8}-\d{6}-[a-z0-9]{8}\.lock$/';
@@ -68,18 +71,23 @@ final class Storage {
 	}
 
 	/**
-	 * Where the data lives and whether the web server is known to obey its deny rules.
+	 * Where the data lives and whether it is safe to write new backup data.
 	 *
-	 * "blocked": the data folder can be served (not private, server ignores
-	 * .htaccess/web.config, no confirmed server rule), so new backups are refused.
+	 * "blocked": new backup data is refused, because the data folder can be served
+	 * (not private, and neither a web request on Apache/LiteSpeed/IIS nor a confirmed
+	 * server rule), or because the private folder could not be restricted to 0700.
 	 *
-	 * @return array{path:string,outside:bool,reason:string,mode_ok:bool,legacy:?string,server_denies:bool,confirmed:bool,blocked:bool,nginx_rule:string}
+	 * @return array{path:string,outside:bool,reason:string,mode_ok:bool,legacy:string[],unclaimed:?string,server_denies:bool,confirmed:bool,blocked:bool,nginx_rule:string}
 	 */
 	public static function status() {
-		$path    = self::dir();
-		$legacy  = self::legacy_dir();
-		$public  = self::$where['outside'] ? $legacy : $path;
-		$denies  = ! empty( $GLOBALS['is_apache'] ) || ! empty( $GLOBALS['is_IIS'] ) || ! empty( $GLOBALS['is_iis7'] );
+		$path      = self::dir();
+		$legacy    = self::legacy_dirs();
+		$unclaimed = self::unclaimed_dir();
+		$public    = self::$where['outside'] ? $legacy : array( $path );
+		if ( $unclaimed ) {
+			$public[] = $unclaimed;
+		}
+		$denies  = self::server_denies();
 		$confirm = self::deny_confirmed();
 		return array(
 			'path'          => $path,
@@ -87,11 +95,33 @@ final class Storage {
 			'reason'        => self::$where['reason'],
 			'mode_ok'       => self::$where['mode_ok'],
 			'legacy'        => $legacy,
+			'unclaimed'     => $unclaimed,
 			'server_denies' => $denies,
 			'confirmed'     => $confirm,
-			'blocked'       => ! self::$where['outside'] && ! $denies && ! $confirm,
-			'nginx_rule'    => $public ? self::nginx_rule( $public ) : '',
+			'blocked'       => ( ! self::$where['outside'] && ! $denies && ! $confirm ) || ! self::$where['mode_ok'],
+			'nginx_rule'    => implode( "\n", array_filter( array_map( array( __CLASS__, 'nginx_rule' ), $public ) ) ),
 		);
+	}
+
+	/**
+	 * Whether the web server is known to obey the deny rules written into the data
+	 * folder: a web request served by Apache or LiteSpeed (both read .htaccess;
+	 * WordPress sets $is_apache for either) or IIS (web.config). WP-CLI never knows
+	 * which server serves the site, so it always needs the confirmation.
+	 *
+	 * @return bool
+	 */
+	public static function server_denies() {
+		/**
+		 * Test seam: whether this request runs under WP-CLI.
+		 *
+		 * @param bool $cli Defaults to the WP_CLI constant.
+		 */
+		if ( apply_filters( 'wp_cleanup_cli_context', defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return false;
+		}
+		$software = isset( $_SERVER['SERVER_SOFTWARE'] ) ? (string) wp_unslash( $_SERVER['SERVER_SOFTWARE'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Only searched for a product name.
+		return ! empty( $GLOBALS['is_apache'] ) || false !== stripos( $software, 'LiteSpeed' ) || ! empty( $GLOBALS['is_IIS'] ) || ! empty( $GLOBALS['is_iis7'] );
 	}
 
 	/**
@@ -109,15 +139,24 @@ final class Storage {
 	}
 
 	/**
-	 * Refuse to start writing a new backup set where the web server could serve it.
+	 * Refuse to write new backup data where it would not be private: a new set
+	 * (no $dir), or a new item in an existing set. Restoring and deleting never ask.
 	 *
-	 * @throws \RuntimeException When blocked.
+	 * @param string|null $dir Existing set folder, or null for a new set.
+	 * @throws \RuntimeException When refused.
 	 */
-	public static function assert_safe_for_backups() {
-		$status = self::status();
-		if ( $status['blocked'] ) {
+	public static function assert_safe_for_backups( $dir = null ) {
+		$status  = self::status();
+		$private = $status['outside'] && ( null === $dir || self::within( untrailingslashit( wp_normalize_path( $dir ) ), untrailingslashit( wp_normalize_path( $status['path'] ) ) ) );
+		if ( ! $private && ! $status['server_denies'] && ! $status['confirmed'] ) {
+			$where = null === $dir ? $status['path'] : $dir;
+			$rule  = self::nginx_rule( null === $dir ? $status['path'] : dirname( dirname( $dir ) ) );
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
-			throw new \RuntimeException( sprintf( /* translators: 1: folder path, 2: nginx rule */ __( 'Refused: backups would be written to %1$s, which this web server may serve (it is not Apache or IIS, and no private folder outside the web root could be used). Define WPCU_DATA_PARENT as a writable folder outside the web root, or add "%2$s" to the server block and define WPCU_UPLOADS_DENY_CONFIRMED as true in wp-config.php. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $status['path'], $status['nginx_rule'] ) );
+			throw new \RuntimeException( sprintf( /* translators: 1: folder path, 2: nginx rule */ __( 'Refused: backup data would be written to %1$s, which the web server may serve (no private folder outside the web root is in use, and the server is not known to obey the folder\'s deny rules; WP-CLI never knows the server). Define WPCU_DATA_PARENT as a writable folder outside the web root, or add "%2$s" to the server block and define WPCU_UPLOADS_DENY_CONFIRMED as true in wp-config.php. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $where, $rule ) );
+		}
+		if ( $private && ! $status['mode_ok'] ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
+			throw new \RuntimeException( sprintf( /* translators: %s: folder path */ __( 'Refused: the private folder %s could not be restricted to its owner (mode 0700), so other accounts on this server could read new backups. Fix its permissions (chmod 700) and try again. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $status['path'] ) );
 		}
 	}
 
@@ -153,17 +192,45 @@ final class Storage {
 	}
 
 	/**
-	 * Data folder in uploads left by an older version while it is being moved out, else null.
+	 * This site's other data folders in uploads, still read (and, when a private
+	 * folder is in use, being moved out): the older folder named by the option, and
+	 * a formerly unclaimed folder once claimed. Folders that may belong to another
+	 * site are never listed.
+	 *
+	 * @return string[]
+	 */
+	public static function legacy_dirs() {
+		$current = untrailingslashit( wp_normalize_path( self::dir() ) );
+		$dirs    = array();
+		foreach ( array( self::OPTION_DIR, self::OPTION_UNCLAIMED ) as $option ) {
+			$dir = self::uploads_path( get_option( $option ) );
+			if ( ! $dir || untrailingslashit( wp_normalize_path( $dir ) ) === $current ) {
+				continue;
+			}
+			$owner = self::uploads_owner( $dir );
+			if ( 'ours' === $owner ) {
+				$dirs[] = $dir;
+			} elseif ( 'unproven' === $owner && self::OPTION_DIR === $option ) {
+				update_option( self::OPTION_UNCLAIMED, basename( $dir ), false );
+				delete_option( self::OPTION_DIR );
+			} elseif ( 'unproven' !== $owner ) {
+				delete_option( $option ); // Gone, or another site's.
+			}
+		}
+		return array_values( array_unique( $dirs ) );
+	}
+
+	/**
+	 * Folder in uploads without an owner marker whose backups name another site
+	 * address: left alone (not read, moved or deleted) until claimed with
+	 * WPCU_CLAIM_DATA_DIR. Null when there is none.
 	 *
 	 * @return string|null
 	 */
-	public static function legacy_dir() {
-		self::dir();
-		if ( ! self::$where['outside'] ) {
-			return null;
-		}
-		$dir = self::uploads_dir( false );
-		return $dir && is_dir( $dir ) ? $dir : null;
+	public static function unclaimed_dir() {
+		self::legacy_dirs();
+		$dir = self::uploads_path( get_option( self::OPTION_UNCLAIMED ) );
+		return $dir && 'unproven' === self::uploads_owner( $dir ) ? $dir : null;
 	}
 
 	/**
@@ -200,6 +267,7 @@ final class Storage {
 	 * @return array{path:string,outside:bool,reason:string,mode_ok:bool}
 	 */
 	private static function resolve() {
+		self::$where = null;
 		$explicit = defined( 'WPCU_DATA_PARENT' ) && is_string( WPCU_DATA_PARENT ) && '' !== WPCU_DATA_PARENT;
 		/**
 		 * Parent folder for the private data folder. Return '' to keep the data in uploads.
@@ -294,15 +362,22 @@ final class Storage {
 	 * @return bool Whether the folder is 0700 now (always true without POSIX modes).
 	 */
 	private static function make_private( $dir ) {
-		if ( '/' !== DIRECTORY_SEPARATOR ) {
-			return true; // Windows: no POSIX modes; access is governed by ACLs.
-		}
-		clearstatcache( true, $dir );
-		if ( 0700 !== ( fileperms( $dir ) & 0777 ) ) {
-			@chmod( $dir, 0700 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Checked below.
+		$ok = true; // Windows: no POSIX modes; access is governed by ACLs.
+		if ( '/' === DIRECTORY_SEPARATOR ) {
 			clearstatcache( true, $dir );
+			if ( 0700 !== ( fileperms( $dir ) & 0777 ) ) {
+				@chmod( $dir, 0700 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Checked below.
+				clearstatcache( true, $dir );
+			}
+			$ok = 0700 === ( fileperms( $dir ) & 0777 );
 		}
-		return 0700 === ( fileperms( $dir ) & 0777 );
+		/**
+		 * Test seam: whether the private folder is restricted to its owner.
+		 *
+		 * @param bool   $ok  Result of the mode check.
+		 * @param string $dir Folder.
+		 */
+		return (bool) apply_filters( 'wp_cleanup_private_mode_ok', $ok, $dir );
 	}
 
 	/**
@@ -411,20 +486,93 @@ final class Storage {
 	}
 
 	/**
-	 * The folder in uploads, as older versions used it. An existing folder without
-	 * an owner marker (made by 0.12.1 or earlier) is claimed by this install when it
-	 * is used; one marked by another install (a copied database sharing uploads) is
-	 * never used: a new folder is made instead.
+	 * @param mixed $name Folder name from an option.
+	 * @return string|null Absolute path in uploads, or null for an invalid name.
+	 */
+	private static function uploads_path( $name ) {
+		if ( ! is_string( $name ) || ! preg_match( self::NAME_PATTERN, $name ) ) {
+			return null;
+		}
+		$uploads = wp_upload_dir( null, false );
+		return trailingslashit( $uploads['basedir'] ) . $name;
+	}
+
+	/**
+	 * Who a data folder in uploads belongs to. A folder without an owner marker
+	 * (0.12.1 and earlier wrote none) is claimed for this site only when every
+	 * backup set in it names this site's address, when it holds no backup sets,
+	 * or when WPCU_CLAIM_DATA_DIR names it. The copied option alone never proves
+	 * ownership: a staging copy sharing uploads has the same option.
+	 *
+	 * @param string $dir Folder.
+	 * @return string missing|ours|foreign|unproven
+	 */
+	private static function uploads_owner( $dir ) {
+		if ( ! file_exists( $dir ) ) {
+			return 'missing';
+		}
+		if ( ! is_dir( $dir ) || is_link( $dir ) ) {
+			return 'foreign';
+		}
+		if ( file_exists( $dir . '/' . self::OWNER_FILE ) ) {
+			return self::owned( $dir ) ? 'ours' : 'foreign';
+		}
+		/**
+		 * Claim an unmarked WP Cleanup folder in uploads for this site.
+		 *
+		 * @param string $name WPCU_CLAIM_DATA_DIR: the folder name (wp-cleanup-…), or ''.
+		 */
+		$claim = (string) apply_filters( 'wp_cleanup_claim_data_dir', defined( 'WPCU_CLAIM_DATA_DIR' ) ? (string) WPCU_CLAIM_DATA_DIR : '' );
+		if ( ( basename( $dir ) === $claim || self::sets_name_this_site( $dir ) ) && self::claim( $dir ) ) {
+			return 'ours';
+		}
+		return 'unproven';
+	}
+
+	/**
+	 * Whether every backup set in a folder was made for this site's address.
+	 *
+	 * @param string $dir Data folder.
+	 * @return bool True also when it holds no backup sets.
+	 */
+	private static function sets_name_this_site( $dir ) {
+		$here = self::site_key( home_url() );
+		foreach ( (array) glob( $dir . '/backups/*', GLOB_ONLYDIR ) as $set ) {
+			$file = $set . '/manifest.json';
+			$data = is_readable( $file ) ? json_decode( (string) file_get_contents( $file ), true ) : null; // phpcs:ignore WordPress.WP.AlternativeFunctions
+			if ( ! is_array( $data ) || ! isset( $data['site'] ) || self::site_key( (string) $data['site'] ) !== $here ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Site address without scheme, "www." or trailing slash, in lower case.
+	 *
+	 * @param string $url URL.
+	 * @return string
+	 */
+	private static function site_key( $url ) {
+		return strtolower( (string) preg_replace( '#^(?:[a-z][a-z0-9+.-]*:)?//(?:www\.)?#i', '', untrailingslashit( trim( $url ) ) ) );
+	}
+
+	/**
+	 * The current folder in uploads (fallback storage). A folder that may belong
+	 * to another site is never used: a new one is made instead, and an unmarked
+	 * one is remembered as unclaimed.
 	 *
 	 * @param bool $create Make a folder when none can be used.
 	 * @return string|null
 	 */
 	private static function uploads_dir( $create ) {
-		$uploads = wp_upload_dir( null, false );
-		$name    = get_option( self::OPTION_DIR );
-		if ( is_string( $name ) && preg_match( self::NAME_PATTERN, $name ) ) {
-			$dir = trailingslashit( $uploads['basedir'] ) . $name;
-			if ( ! file_exists( $dir ) ) {
+		$dir = self::uploads_path( get_option( self::OPTION_DIR ) );
+		if ( $dir ) {
+			$owner = self::uploads_owner( $dir );
+			if ( 'ours' === $owner ) {
+				return $dir;
+			}
+			if ( 'missing' === $owner ) {
 				if ( ! $create ) {
 					return null;
 				}
@@ -433,15 +581,15 @@ final class Storage {
 				}
 				return $dir; // ensure_protected_dir() reports a folder that could not be made.
 			}
-			if ( is_dir( $dir ) && ! is_link( $dir ) && ( self::owned( $dir ) || ( ! file_exists( $dir . '/' . self::OWNER_FILE ) && self::claim( $dir ) ) ) ) {
-				return $dir;
+			if ( 'unproven' === $owner ) {
+				update_option( self::OPTION_UNCLAIMED, basename( $dir ), false );
 			}
 		}
 		if ( ! $create ) {
 			return null;
 		}
 		$name = 'wp-cleanup-' . strtolower( wp_generate_password( 16, false, false ) );
-		$dir  = trailingslashit( $uploads['basedir'] ) . $name;
+		$dir  = self::uploads_path( $name );
 		if ( wp_mkdir_p( $dir ) ) {
 			self::claim( $dir );
 		}
@@ -459,10 +607,22 @@ final class Storage {
 	 * @param string $to Private folder.
 	 */
 	private static function migrate_legacy( $to ) {
-		$from = self::uploads_dir( false );
-		if ( ! $from || ! is_dir( $from ) || is_link( $from ) ) {
-			return;
+		self::$where = array(
+			'path'    => $to,
+			'outside' => true,
+			'reason'  => '',
+			'mode_ok' => true,
+		); // Lets legacy_dirs() tell the current folder apart while resolving.
+		foreach ( self::legacy_dirs() as $from ) {
+			self::migrate_folder( $from, $to );
 		}
+	}
+
+	/**
+	 * @param string $from Folder in uploads owned by this site.
+	 * @param string $to   Private folder.
+	 */
+	private static function migrate_folder( $from, $to ) {
 		if ( is_dir( $from . '/backups' ) ) {
 			self::ensure_protected_dir( $to . '/backups' );
 			foreach ( (array) glob( $from . '/backups/*', GLOB_ONLYDIR ) as $set ) {
@@ -497,7 +657,11 @@ final class Storage {
 		if ( self::only_guards( $from, array( 'backups', self::OWNER_FILE ) ) && ( ! is_dir( $from . '/backups' ) || self::only_guards( $from . '/backups', array() ) ) ) {
 			self::rmtree( $from );
 			if ( ! file_exists( $from ) ) {
-				delete_option( self::OPTION_DIR );
+				foreach ( array( self::OPTION_DIR, self::OPTION_UNCLAIMED ) as $option ) {
+					if ( get_option( $option ) === basename( $from ) ) {
+						delete_option( $option );
+					}
+				}
 			}
 		}
 	}
@@ -581,7 +745,7 @@ final class Storage {
 	 */
 	public static function delete_tree( $dir ) {
 		$dir = untrailingslashit( wp_normalize_path( $dir ) );
-		foreach ( array( self::dir(), self::legacy_dir() ) as $base ) {
+		foreach ( array_merge( array( self::dir() ), self::legacy_dirs() ) as $base ) {
 			if ( $base && self::within( $dir, untrailingslashit( wp_normalize_path( $base ) ) ) ) {
 				return self::rmtree( $dir );
 			}
@@ -604,14 +768,12 @@ final class Storage {
 		if ( is_string( $stored ) && preg_match( self::NAME_PATTERN, basename( $stored ) ) && self::owned( $stored ) ) {
 			self::rmtree( $stored );
 		}
-		$name = self::dir_name();
-		if ( ! $name ) {
-			return;
-		}
-		$uploads = wp_upload_dir( null, false );
-		$dir     = trailingslashit( $uploads['basedir'] ) . $name;
-		if ( preg_match( self::NAME_PATTERN, $name ) && self::owned( $dir ) ) {
-			self::rmtree( $dir );
+		// Only folders marked as this site's; an unmarked one is never claimed here.
+		foreach ( array( self::OPTION_DIR, self::OPTION_UNCLAIMED ) as $option ) {
+			$dir = self::uploads_path( get_option( $option ) );
+			if ( $dir && self::owned( $dir ) ) {
+				self::rmtree( $dir );
+			}
 		}
 	}
 

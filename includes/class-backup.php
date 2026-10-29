@@ -85,18 +85,29 @@ final class Backup {
 	}
 
 	/**
-	 * Backups roots to read: the current one, then an older one in uploads
-	 * whose sets have not all been moved yet.
+	 * Backups roots to read: the current one, then this site's older folders in
+	 * uploads whose sets have not all been moved yet.
 	 *
 	 * @return string[]
 	 */
 	public static function roots() {
-		$roots  = array( self::root() );
-		$legacy = Storage::legacy_dir();
-		if ( $legacy && is_dir( $legacy . '/backups' ) ) {
-			$roots[] = $legacy . '/backups';
+		$roots = array( self::root() );
+		foreach ( Storage::legacy_dirs() as $legacy ) {
+			if ( is_dir( $legacy . '/backups' ) ) {
+				$roots[] = $legacy . '/backups';
+			}
 		}
 		return $roots;
+	}
+
+	/**
+	 * Refuse new data for this set where it would not be private (see
+	 * Storage::assert_safe_for_backups()). Restore and delete never call this.
+	 *
+	 * @throws \RuntimeException When refused.
+	 */
+	public function assert_writable() {
+		Storage::assert_safe_for_backups( $this->dir );
 	}
 
 	/**
@@ -206,6 +217,7 @@ final class Backup {
 	 * @return int
 	 */
 	public function add_item( array $item ) {
+		$this->assert_writable();
 		$n                          = count( $this->manifest['items'] );
 		$this->manifest['items'][ $n ] = array(
 			'n'        => $n,
