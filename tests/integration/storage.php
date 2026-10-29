@@ -70,6 +70,14 @@ function wpst_hashes( $dir ) {
 	return $out;
 }
 
+/** An unmarked 0.12.1-style data folder holding one backup set made for $site. */
+function wpst_old_folder( $dir, $site ) {
+	$id = '20260101-000000-' . substr( md5( $dir . $site ), 0, 8 );
+	wp_mkdir_p( $dir . '/backups/' . $id );
+	file_put_contents( $dir . '/backups/' . $id . '/manifest.json', wp_json_encode( array( 'id' => $id, 'created' => 1, 'site' => $site, 'items' => array(), 'restored' => null ) ) );
+	return $id;
+}
+
 /** Pretend the web server is nginx (true) or Apache (false). */
 function wpst_nginx( $on ) {
 	$GLOBALS['is_apache'] = ! $on;
@@ -130,8 +138,8 @@ $reset = static function () use ( $test_parent, $test_doc, $parent_of_wp, $updir
 	wpst_rm( $test_doc, $parent_of_wp );
 	foreach ( array( $parent_of_wp, $updir ) as $base ) {
 		foreach ( (array) glob( $base . '/wp-cleanup-*' ) as $dir ) {
-			if ( ! is_readable( $dir . '/owner.txt' ) || 'not-this-site' === trim( file_get_contents( $dir . '/owner.txt' ) ) ) {
-				wpst_rm( $dir, $base ); // Test leftovers: another site's, or unmarked.
+			if ( $updir === $base || ! is_readable( $dir . '/owner.txt' ) || 'not-this-site' === trim( file_get_contents( $dir . '/owner.txt' ) ) ) {
+				wpst_rm( $dir, $base ); // Test leftovers: anything in uploads; outside it, another site's or unmarked.
 			}
 		}
 	}
@@ -558,6 +566,103 @@ wpst_ok( null === $st['unclaimed'] && is_dir( $private . '/backups/' . $set_id )
 $claimed = Backup::open( $set_id );
 wpst_ok( $claimed && $claimed->delete(), 'claimed set opens and deletes' );
 unset( $claimed );
+
+/* ---------------------------------------------------------------------- */
+WP_CLI::log( '7. Glob characters, racing claims, failed 0700 with an old set, case in paths' );
+/* ---------------------------------------------------------------------- */
+
+$reset();
+// An uploads path with glob syntax must not hide another site's sets.
+$odd     = $updir . '/zzwpcust[1]';
+$odd_dir = static function ( $u ) use ( $odd ) {
+	$u['basedir'] = $odd;
+	$u['baseurl'] = $u['baseurl'] . '/zzwpcust[1]';
+	return $u;
+};
+add_filter( 'upload_dir', $odd_dir );
+$theirs = $odd . '/wp-cleanup-4444444444444444';
+$tid    = wpst_old_folder( $theirs, 'https://production.example' );
+update_option( Storage::OPTION_DIR, basename( $theirs ), false );
+Storage::reset();
+$st = Storage::status();
+wpst_ok( ! file_exists( $theirs . '/owner.txt' ) && wp_normalize_path( (string) $st['unclaimed'] ) === wp_normalize_path( $theirs ) && is_dir( $theirs . '/backups/' . $tid ), 'path with "[1]": another site\'s set is still seen; folder not claimed or moved' );
+$mine_old = $odd . '/wp-cleanup-5555555555555555';
+$mid      = wpst_old_folder( $mine_old, home_url() );
+update_option( Storage::OPTION_DIR, basename( $mine_old ), false );
+Storage::reset();
+$st = Storage::status();
+wpst_ok( ! file_exists( $mine_old ) && is_dir( wp_normalize_path( $st['path'] ) . '/backups/' . $mid ), 'path with "[1]": this site\'s set is found and moved' );
+Backup::open( $mid )->delete();
+remove_filter( 'upload_dir', $odd_dir );
+delete_option( Storage::OPTION_UNCLAIMED );
+wpst_rm( $odd, $updir );
+
+// Two sites racing for an unmarked, empty folder: a marker written first by the other is never overwritten.
+$race = $updir . '/wp-cleanup-6666666666666666';
+wp_mkdir_p( $race );
+update_option( Storage::OPTION_DIR, basename( $race ), false );
+add_filter( 'wp_cleanup_claim_data_dir', static function ( $name ) use ( $race ) {
+	if ( ! file_exists( $race . '/owner.txt' ) ) {
+		file_put_contents( $race . '/owner.txt', 'not-this-site' ); // The other site wins between the check and the write.
+	}
+	return $name;
+} );
+Storage::reset();
+$st = Storage::status();
+wpst_ok( 'not-this-site' === file_get_contents( $race . '/owner.txt' ) && array() === $st['legacy'] && null === $st['unclaimed'] && is_dir( $race ), 'marker created by another request first: kept, and the folder is not used' );
+remove_all_filters( 'wp_cleanup_claim_data_dir' );
+wpst_rm( $race, $updir );
+
+// Failed 0700 repair: no new data anywhere, not even into an old set still in uploads.
+add_filter( 'wp_cleanup_data_parent', '__return_empty_string' );
+add_filter( 'wp_cleanup_uploads_deny_confirmed', '__return_true' );
+Storage::reset();
+$old_set = wpst_option_set( $opt_old, $value ); // In uploads (fallback); its lock keeps it there below.
+remove_all_filters( 'wp_cleanup_data_parent' );
+add_filter( 'wp_cleanup_private_mode_ok', '__return_false' );
+Storage::reset();
+$st      = Storage::status();
+$refused = '';
+try {
+	$old_set->add_item( array( 'type' => 'option', 'id' => 'zzwpcust_more', 'label' => 'zzwpcust_more', 'status' => 'orphaned', 'owner' => '', 'count' => 1, 'bytes' => 1 ) );
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+wpst_ok( $st['confirmed'] && ! $st['mode_ok'] && 0 === strpos( wp_normalize_path( $old_set->dir ), $updir . '/' ) && false !== strpos( $refused, '0700' ), 'failed 0700 repair: an old set in uploads (server rule confirmed) takes no new items' );
+$res = $old_set->restore();
+wp_cache_flush();
+wpst_ok( $res && $res[0]['ok'] && $value === get_option( $opt_old ) && $old_set->delete(), 'and it still restores and deletes' );
+unset( $old_set );
+remove_all_filters( 'wp_cleanup_private_mode_ok' );
+remove_all_filters( 'wp_cleanup_uploads_deny_confirmed' );
+delete_option( $opt_old );
+Storage::reset();
+Storage::dir(); // Mode fine again: the emptied folder in uploads is moved out and removed.
+wpst_ok( false === get_option( Storage::OPTION_DIR ) && ! glob( $updir . '/wp-cleanup-*' ), 'with the mode repaired, the emptied folder in uploads is removed' );
+
+// Site addresses: host case, scheme, "www." and a trailing slash do not matter; path case does.
+$home = static function () {
+	return 'http://example.test/production';
+};
+add_filter( 'home_url', $home );
+foreach ( array(
+	array( 'https://WWW.Example.TEST/production/', true, 'same site, other scheme, host case, www and slash: claimed' ),
+	array( 'http://example.test/Production', false, 'path differing only in case: not claimed' ),
+) as $i => $case ) {
+	$folder = $updir . '/wp-cleanup-777777777777777' . $i;
+	$cid    = wpst_old_folder( $folder, $case[0] );
+	update_option( Storage::OPTION_DIR, basename( $folder ), false );
+	Storage::reset();
+	$st      = Storage::status();
+	$claimed = ! file_exists( $folder ) && is_dir( wp_normalize_path( $st['path'] ) . '/backups/' . $cid );
+	wpst_ok( $case[1] === $claimed && ( $case[1] || ! file_exists( $folder . '/owner.txt' ) ), $case[2] );
+	if ( $claimed ) {
+		Backup::open( $cid )->delete();
+	}
+	delete_option( Storage::OPTION_UNCLAIMED );
+	wpst_rm( $folder, $updir );
+}
+remove_filter( 'home_url', $home );
 
 /* ---------------------------------------------------------------------- */
 /* Teardown                                                               */

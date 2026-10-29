@@ -146,17 +146,18 @@ final class Storage {
 	 * @throws \RuntimeException When refused.
 	 */
 	public static function assert_safe_for_backups( $dir = null ) {
-		$status  = self::status();
+		$status = self::status();
+		if ( ! $status['mode_ok'] ) {
+			// Checked first: while the private folder is not 0700, no new backup data goes anywhere.
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
+			throw new \RuntimeException( sprintf( /* translators: %s: folder path */ __( 'Refused: the private folder %s could not be restricted to its owner (mode 0700), so other accounts on this server could read new backups. Fix its permissions (chmod 700) and try again. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $status['path'] ) );
+		}
 		$private = $status['outside'] && ( null === $dir || self::within( untrailingslashit( wp_normalize_path( $dir ) ), untrailingslashit( wp_normalize_path( $status['path'] ) ) ) );
 		if ( ! $private && ! $status['server_denies'] && ! $status['confirmed'] ) {
 			$where = null === $dir ? $status['path'] : $dir;
 			$rule  = self::nginx_rule( null === $dir ? $status['path'] : dirname( dirname( $dir ) ) );
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( sprintf( /* translators: 1: folder path, 2: nginx rule */ __( 'Refused: backup data would be written to %1$s, which the web server may serve (no private folder outside the web root is in use, and the server is not known to obey the folder\'s deny rules; WP-CLI never knows the server). Define WPCU_DATA_PARENT as a writable folder outside the web root, or add "%2$s" to the server block and define WPCU_UPLOADS_DENY_CONFIRMED as true in wp-config.php. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $where, $rule ) );
-		}
-		if ( $private && ! $status['mode_ok'] ) {
-			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
-			throw new \RuntimeException( sprintf( /* translators: %s: folder path */ __( 'Refused: the private folder %s could not be restricted to its owner (mode 0700), so other accounts on this server could read new backups. Fix its permissions (chmod 700) and try again. Existing backups can still be restored and deleted.', 'wp-cleanup' ), $status['path'] ) );
 		}
 	}
 
@@ -468,13 +469,25 @@ final class Storage {
 	}
 
 	/**
-	 * Write this install's owner marker into a folder.
+	 * Write this install's owner marker into a folder, never over one that exists:
+	 * the marker is created exclusively, then read back. When two sites race for an
+	 * unmarked folder, only the one whose marker was created first owns it.
 	 *
 	 * @param string $dir Folder.
-	 * @return bool
+	 * @return bool Whether the folder is now marked as this site's.
 	 */
 	private static function claim( $dir ) {
-		return false !== file_put_contents( $dir . '/' . self::OWNER_FILE, self::owner_id() ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		$file   = $dir . '/' . self::OWNER_FILE;
+		$handle = @fopen( $file, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Exclusive create; fails when a marker exists.
+		if ( $handle ) {
+			$written = fwrite( $handle, self::owner_id() ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			if ( false === $written ) {
+				return false;
+			}
+		}
+		clearstatcache( true, $file );
+		return self::owned( $dir );
 	}
 
 	/**
@@ -523,8 +536,13 @@ final class Storage {
 		 * @param string $name WPCU_CLAIM_DATA_DIR: the folder name (wp-cleanup-…), or ''.
 		 */
 		$claim = (string) apply_filters( 'wp_cleanup_claim_data_dir', defined( 'WPCU_CLAIM_DATA_DIR' ) ? (string) WPCU_CLAIM_DATA_DIR : '' );
-		if ( ( basename( $dir ) === $claim || self::sets_name_this_site( $dir ) ) && self::claim( $dir ) ) {
-			return 'ours';
+		if ( basename( $dir ) === $claim || self::sets_name_this_site( $dir ) ) {
+			if ( self::claim( $dir ) ) {
+				return 'ours';
+			}
+			if ( file_exists( $dir . '/' . self::OWNER_FILE ) ) {
+				return 'foreign'; // Another request marked it first.
+			}
 		}
 		return 'unproven';
 	}
@@ -537,7 +555,11 @@ final class Storage {
 	 */
 	private static function sets_name_this_site( $dir ) {
 		$here = self::site_key( home_url() );
-		foreach ( (array) glob( $dir . '/backups/*', GLOB_ONLYDIR ) as $set ) {
+		$sets = is_dir( $dir . '/backups' ) ? self::subdirs( $dir . '/backups' ) : array();
+		if ( null === $sets ) {
+			return false; // Unreadable: never taken for "no sets".
+		}
+		foreach ( $sets as $set ) {
 			$file = $set . '/manifest.json';
 			$data = is_readable( $file ) ? json_decode( (string) file_get_contents( $file ), true ) : null; // phpcs:ignore WordPress.WP.AlternativeFunctions
 			if ( ! is_array( $data ) || ! isset( $data['site'] ) || self::site_key( (string) $data['site'] ) !== $here ) {
@@ -548,13 +570,42 @@ final class Storage {
 	}
 
 	/**
-	 * Site address without scheme, "www." or trailing slash, in lower case.
+	 * Site address for comparison: host in lower case without "www.", port, and
+	 * the path as it is (paths can be case-sensitive), without scheme or trailing slash.
 	 *
 	 * @param string $url URL.
 	 * @return string
 	 */
 	private static function site_key( $url ) {
-		return strtolower( (string) preg_replace( '#^(?:[a-z][a-z0-9+.-]*:)?//(?:www\.)?#i', '', untrailingslashit( trim( $url ) ) ) );
+		$parts = wp_parse_url( trim( $url ) );
+		if ( ! is_array( $parts ) || empty( $parts['host'] ) ) {
+			return untrailingslashit( trim( $url ) );
+		}
+		$host = (string) preg_replace( '/^www\./', '', strtolower( $parts['host'] ) );
+		$port = isset( $parts['port'] ) ? ':' . $parts['port'] : '';
+		return $host . $port . untrailingslashit( isset( $parts['path'] ) ? $parts['path'] : '' );
+	}
+
+	/**
+	 * Subfolders of a folder, listed literally (no glob patterns, so "[", "*" or
+	 * "?" in a path cannot hide entries). Links are left out.
+	 *
+	 * @param string $dir Folder.
+	 * @return string[]|null Paths, or null when the folder cannot be read.
+	 */
+	public static function subdirs( $dir ) {
+		$entries = @scandir( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- Checked below.
+		if ( false === $entries ) {
+			return null;
+		}
+		$dirs = array();
+		foreach ( $entries as $entry ) {
+			$path = $dir . '/' . $entry;
+			if ( '.' !== $entry && '..' !== $entry && is_dir( $path ) && ! is_link( $path ) ) {
+				$dirs[] = $path;
+			}
+		}
+		return $dirs;
 	}
 
 	/**
@@ -625,7 +676,7 @@ final class Storage {
 	private static function migrate_folder( $from, $to ) {
 		if ( is_dir( $from . '/backups' ) ) {
 			self::ensure_protected_dir( $to . '/backups' );
-			foreach ( (array) glob( $from . '/backups/*', GLOB_ONLYDIR ) as $set ) {
+			foreach ( (array) self::subdirs( $from . '/backups' ) as $set ) {
 				$id = basename( $set );
 				if ( ! preg_match( self::SET_PATTERN, $id ) || is_link( $set ) || file_exists( $to . '/backups/' . $id ) ) {
 					continue;

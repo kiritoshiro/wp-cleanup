@@ -175,7 +175,7 @@ final class Backup {
 	public static function all() {
 		$list = array();
 		foreach ( self::roots() as $root ) {
-			foreach ( (array) glob( $root . '/*', GLOB_ONLYDIR ) as $dir ) {
+			foreach ( (array) Storage::subdirs( $root ) as $dir ) {
 				$backup = isset( $list[ basename( $dir ) ] ) ? null : self::open( basename( $dir ) );
 				if ( $backup ) {
 					$manifest            = $backup->manifest;
