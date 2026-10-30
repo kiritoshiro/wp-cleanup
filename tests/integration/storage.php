@@ -116,7 +116,7 @@ $doc_root     = $_SERVER['DOCUMENT_ROOT'] ?? null;
 
 $reset = static function () use ( $test_parent, $test_doc, $parent_of_wp, $updir, $opt_old, $opt_new, $opt_fresh, $set_parent, $server, $doc_root ) {
 	remove_filter( 'wp_cleanup_data_parent', $set_parent );
-	foreach ( array( 'wp_cleanup_uploads_deny_confirmed', 'wp_cleanup_cli_context', 'wp_cleanup_private_mode_ok', 'wp_cleanup_claim_data_dir' ) as $hook ) {
+	foreach ( array( 'wp_cleanup_uploads_deny_confirmed', 'wp_cleanup_cli_context', 'wp_cleanup_private_mode_ok', 'wp_cleanup_claim_data_dir', 'wp_cleanup_before_claim' ) as $hook ) {
 		remove_all_filters( $hook );
 	}
 	delete_option( Storage::OPTION_UNCLAIMED );
@@ -612,6 +612,49 @@ $st = Storage::status();
 wpst_ok( 'not-this-site' === file_get_contents( $race . '/owner.txt' ) && array() === $st['legacy'] && null === $st['unclaimed'] && is_dir( $race ), 'marker created by another request first: kept, and the folder is not used' );
 remove_all_filters( 'wp_cleanup_claim_data_dir' );
 wpst_rm( $race, $updir );
+
+// Fallback storage: the recorded folder is missing and another site marks it between mkdir and our marker.
+add_filter( 'wp_cleanup_data_parent', '__return_empty_string' );
+$lost = $updir . '/wp-cleanup-8888888888888888';
+update_option( Storage::OPTION_DIR, basename( $lost ), false );
+$steal = static function ( $dir ) {
+	if ( ! file_exists( $dir . '/owner.txt' ) ) {
+		file_put_contents( $dir . '/owner.txt', 'not-this-site' );
+	}
+};
+$steal_lost = static function ( $dir ) use ( $lost, $steal ) {
+	if ( wp_normalize_path( $dir ) === wp_normalize_path( $lost ) ) {
+		$steal( $dir );
+	}
+};
+add_action( 'wp_cleanup_before_claim', $steal_lost );
+Storage::reset();
+$used = wp_normalize_path( Storage::dir() );
+wpst_ok( $used !== wp_normalize_path( $lost ) && 'not-this-site' === file_get_contents( $lost . '/owner.txt' ) && is_file( $used . '/owner.txt' ) && 'not-this-site' !== file_get_contents( $used . '/owner.txt' ) && get_option( Storage::OPTION_DIR ) === basename( $used ), 'recorded folder lost to another site mid-creation: a new folder of its own is used and recorded' );
+remove_action( 'wp_cleanup_before_claim', $steal_lost );
+wpst_rm( $used, $updir );
+// Every attempt lost: fail closed instead of writing into another site's folder.
+update_option( Storage::OPTION_DIR, basename( $lost ), false );
+wpst_rm( $lost, $updir );
+add_action( 'wp_cleanup_before_claim', $steal );
+Storage::reset();
+$refused = '';
+try {
+	Storage::dir();
+} catch ( RuntimeException $e ) {
+	$refused = $e->getMessage();
+}
+$marked = array_map( static function ( $dir ) {
+	return trim( (string) file_get_contents( $dir . '/owner.txt' ) );
+}, (array) glob( $updir . '/wp-cleanup-*' ) );
+wpst_ok( '' !== $refused && $marked && array( 'not-this-site' ) === array_values( array_unique( $marked ) ), 'every attempt lost: refused, and no folder of another site is used or re-marked' );
+remove_action( 'wp_cleanup_before_claim', $steal );
+remove_all_filters( 'wp_cleanup_data_parent' );
+foreach ( (array) glob( $updir . '/wp-cleanup-*' ) as $dir ) {
+	wpst_rm( $dir, $updir );
+}
+delete_option( Storage::OPTION_DIR );
+Storage::reset();
 
 // Failed 0700 repair: no new data anywhere, not even into an old set still in uploads.
 add_filter( 'wp_cleanup_data_parent', '__return_empty_string' );

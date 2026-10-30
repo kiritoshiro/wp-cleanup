@@ -477,7 +477,13 @@ final class Storage {
 	 * @return bool Whether the folder is now marked as this site's.
 	 */
 	private static function claim( $dir ) {
-		$file   = $dir . '/' . self::OWNER_FILE;
+		$file = $dir . '/' . self::OWNER_FILE;
+		/**
+		 * Test seam: runs just before the owner marker is created.
+		 *
+		 * @param string $dir Folder being claimed.
+		 */
+		do_action( 'wp_cleanup_before_claim', $dir );
 		$handle = @fopen( $file, 'xb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions -- Exclusive create; fails when a marker exists.
 		if ( $handle ) {
 			$written = fwrite( $handle, self::owner_id() ); // phpcs:ignore WordPress.WP.AlternativeFunctions
@@ -627,10 +633,10 @@ final class Storage {
 				if ( ! $create ) {
 					return null;
 				}
-				if ( wp_mkdir_p( $dir ) ) {
-					self::claim( $dir );
+				if ( wp_mkdir_p( $dir ) && self::claim( $dir ) ) {
+					return $dir;
 				}
-				return $dir; // ensure_protected_dir() reports a folder that could not be made.
+				// Another site marked it first (or it could not be made): use a new folder.
 			}
 			if ( 'unproven' === $owner ) {
 				update_option( self::OPTION_UNCLAIMED, basename( $dir ), false );
@@ -639,13 +645,19 @@ final class Storage {
 		if ( ! $create ) {
 			return null;
 		}
-		$name = 'wp-cleanup-' . strtolower( wp_generate_password( 16, false, false ) );
-		$dir  = self::uploads_path( $name );
-		if ( wp_mkdir_p( $dir ) ) {
-			self::claim( $dir );
+		// Only a folder this request created and marked is used; another site may win the marker race.
+		for ( $try = 0; $try < 3; $try++ ) {
+			$name = 'wp-cleanup-' . strtolower( wp_generate_password( 16, false, false ) );
+			$dir  = self::uploads_path( $name );
+			if ( ! file_exists( $dir ) && wp_mkdir_p( $dir ) && self::claim( $dir ) ) {
+				update_option( self::OPTION_DIR, $name, false );
+				return $dir;
+			}
 		}
-		update_option( self::OPTION_DIR, $name, false );
-		return $dir;
+		$uploads = wp_upload_dir( null, false );
+		/* translators: %s: uploads folder path */
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
+		throw new \RuntimeException( sprintf( /* translators: %s: uploads folder path */ __( 'Could not create a data folder of this site in %s.', 'wp-cleanup' ), $uploads['basedir'] ) );
 	}
 
 	/**
