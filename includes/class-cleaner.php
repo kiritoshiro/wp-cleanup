@@ -377,6 +377,9 @@ final class Cleaner {
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Plain-text exception; Admin::render_notice escapes HTML, CLI prints text.
 			throw new \RuntimeException( __( 'Could not move the folder (is it on another filesystem or locked?).', 'wp-cleanup' ) );
 		}
+		if ( Backup::disarm_tree( $target ) ) {
+			return __( 'Folder moved into the backup set; some script files in it could not be renamed to inert names.', 'wp-cleanup' );
+		}
 		return __( 'Folder moved into the backup set.', 'wp-cleanup' );
 	}
 }

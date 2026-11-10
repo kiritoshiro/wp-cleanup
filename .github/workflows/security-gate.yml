@@ -45,10 +45,25 @@ jobs:
     name: WordPress
     uses: ./.github/workflows/wordpress-checks.yml
 
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Blocks a PR that *introduces* a vulnerable dependency, which the
+      # scans above would only catch once the lockfile is already merged.
+      # The npm build tools and the Composer scanner tooling are dev-only,
+      # but they run in CI and build the shipped files, so dev scope counts.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          fail-on-scopes: runtime, development
+
   gate:
     name: All security checks passed
     if: ${{ always() }}
-    needs: [baseline, codeql, wordpress]
+    needs: [baseline, codeql, wordpress, dependency-review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

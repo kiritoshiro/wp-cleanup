@@ -152,7 +152,7 @@ final class CLI {
 		$skip_backup = (bool) \WP_CLI\Utils\get_flag_value( $assoc, 'skip-backup', false );
 		\WP_CLI::confirm( sprintf( 'Delete %d item(s)%s?', count( $plan['planned'] ), $skip_backup ? ' WITHOUT a backup' : '' ), $assoc );
 
-		$report = $cleaner->clean( array_map( array( __CLASS__, 'key' ), $plan['planned'] ), $policy + array( 'skip_backup' => $skip_backup ) );
+		$report = self::or_error( static function () use ( $cleaner, $plan, $policy, $skip_backup ) { return $cleaner->clean( array_map( array( __CLASS__, 'key' ), $plan['planned'] ), $policy + array( 'skip_backup' => $skip_backup ) ); } );
 		foreach ( $report['failed'] as $row ) {
 			\WP_CLI::warning( 'Failed: ' . $row['label'] . ': ' . $row['message'] );
 		}
@@ -313,7 +313,7 @@ final class CLI {
 				return;
 			}
 			\WP_CLI::confirm( sprintf( 'Repair %d problem(s)? Only WordPress data changes; a backup set is written.', $fixable ), $assoc );
-			$backup = Backup::start();
+			$backup = self::or_error( array( Backup::class, 'start' ) );
 			$done   = 0;
 			foreach ( array_keys( $issues ) as $id ) {
 				$r = Media_Integrity::repair( $id, $backup );
@@ -394,7 +394,7 @@ final class CLI {
 			\WP_CLI::confirm( sprintf( 'Convert %d image(s)? Old files are moved into a backup set.', count( $ids ) ), $assoc );
 		}
 
-		$backup = $dry ? null : Backup::start();
+		$backup = $dry ? null : self::or_error( array( Backup::class, 'start' ) );
 		$tally  = array( 'converted' => 0, 'failed' => 0, 'before' => 0, 'after' => 0 );
 		foreach ( $ids as $id ) {
 			if ( ! $dry ) {
@@ -476,5 +476,20 @@ final class CLI {
 				}
 			)
 		);
+	}
+
+	/**
+	 * Run a step that may refuse (e.g. no safe place for backups) and stop with its message.
+	 *
+	 * @param callable $step Step.
+	 * @return mixed
+	 */
+	private static function or_error( $step ) {
+		try {
+			return call_user_func( $step );
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+		return null;
 	}
 }
