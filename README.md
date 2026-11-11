@@ -143,7 +143,7 @@ Each item gets a status, based on evidence in this order:
 5. **Unknown owner**: nothing references it, and the prefix isn't recognised. Deleted only after you confirm you've reviewed it.
 6. **Safe to clean**: structural junk (rows pointing at deleted objects, expired transients).
 
-"References" comes from an index of every identifier-like string literal and class name in installed PHP code, including WordPress core and libraries plugins bundle (under `libs/`, `vendor/` and so on). Path literals count per segment, so a folder built as `$dir . '/name'` or `"{$dir}/name"` is credited to that code; another plugin's main file (`'other/other.php'`) is not. The index is cached and rebuilt whenever plugins or themes change. If any code can't be fully read (for example a file over 8 MB, a folder PHP can't list, or a file the pattern matcher gives up on), nothing is marked orphaned until it can.
+"References" comes from an index of every identifier-like string literal and class name in installed PHP code, including WordPress core and libraries plugins bundle (under `libs/`, `vendor/` and so on). Path literals count per segment, so a folder built as `$dir . '/name'`, `"{$dir}/name"` or `"{$dir}/name/file.css"` is credited to that code; another plugin's main file (`'other/other.php'`) is not. Symlinked folders are followed. The index is cached and rebuilt whenever plugins or themes change. If any code can't be fully read (for example a file over 8 MB, a folder PHP can't list, a file that can't be read, or a file the pattern matcher gives up on), nothing is marked orphaned until it can, and unknown-owner items can't be deleted either, even after you confirm you've reviewed them.
 
 Many plugins and themes build names at runtime, so the name in the database differs from the literal in their code. Each name is therefore also checked in these forms:
 
@@ -155,7 +155,7 @@ An exact reference in any of these forms beats a match on a prefix alone. Core n
 
 ## Safety model
 
-- A selection is re-checked against a **fresh scan** at deletion time, so a stale screen or a crafted request can't delete anything that is core or in use now.
+- A selection is re-checked against a **fresh scan**, with a freshly rebuilt code index, at deletion time, so a stale screen or a crafted request can't delete anything that is core or in use now.
 - Every cleanup first writes a **backup set** to a private folder (see [Where backups are stored](#where-backups-are-stored)). It contains:
   - SQL for rows and tables, with values stored as hex literals so any bytes round-trip exactly. The file is `item-<n>.sql.php` and starts with `<?php exit; __halt_compiler(); ?>`, so if it is ever requested through PHP the answer is empty
   - JSON for cron events

@@ -36,7 +36,7 @@ function wpcu_fixture_active_fields() {
 // Upload folders named only inside built paths: the folder name never stands alone as a literal.
 function wpcu_fixture_active_upload_dirs() {
 	$dir = wp_upload_dir();
-	return array( $dir['basedir'] . '/fixdir-css-js', "{$dir['basedir']}/fixdir-tail" );
+	return array( $dir['basedir'] . '/fixdir-css-js', "{$dir['basedir']}/fixdir-tail", "{$dir['basedir']}/fixdir-nested/cache.css" );
 }
 
 // Checking for another plugin's main file does not claim that plugin's folders.

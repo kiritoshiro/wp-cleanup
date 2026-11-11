@@ -52,8 +52,9 @@ final class Cleaner {
 			return $report;
 		}
 
-		// Fresh classification of just the involved types.
-		$scan    = ( new Scanner() )->scan( array_values( array_unique( $wanted ) ) );
+		// Fresh classification of just the involved types. The code index is rebuilt too: its cache
+		// key does not see changes inside bundled libraries.
+		$scan    = ( new Scanner( true ) )->scan( array_values( array_unique( $wanted ) ) );
 		$current = array();
 		foreach ( $scan['items'] as $item ) {
 			$current[ $item['type'] . '|' . $item['id'] ] = $item;
@@ -66,6 +67,16 @@ final class Cleaner {
 				continue;
 			}
 			$item = $current[ $key ];
+			// "No code references it" is unproven while some code could not be read, whatever the policy.
+			if ( ! empty( $scan['incomplete'] ) && in_array( $item['status'], array( Plugin::STATUS_UNKNOWN, Plugin::STATUS_ORPHANED ), true ) ) {
+				$report['refused'][] = array(
+					'key'     => $key,
+					'label'   => $item['label'],
+					/* translators: %s: plugin/theme names */
+					'message' => sprintf( __( 'Refused: some installed code could not be fully checked (%s), so items without a confirmed owner cannot be deleted until it can.', 'wp-cleanup' ), implode( ', ', array_unique( $scan['incomplete'] ) ) ),
+				);
+				continue;
+			}
 			if ( ! Plugin::is_deletable( $item['status'], $options ) ) {
 				$labels              = Plugin::status_labels();
 				$report['refused'][] = array(

@@ -76,7 +76,7 @@ foreach ( array( 'wpcf7_contact_form', 'fixact_item' ) as $pt ) {
 foreach ( array( 'wordfence_daily_cron', 'wordfence_custom_sched', 'fixact_cron', 'zzold_cron_hook' ) as $hook ) {
 	wp_unschedule_hook( $hook );
 }
-foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
+foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/fixdir-nested', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
 	if ( is_dir( $dir ) ) {
 		array_map( 'unlink', glob( $dir . '/*' ) );
 		rmdir( $dir );
@@ -155,7 +155,7 @@ wp_update_term_count_now( array( $cat['term_taxonomy_id'] ), 'category' );
 wp_insert_comment( array( 'comment_post_ID' => $cf7_ids[1], 'comment_content' => 'note on a form', 'comment_approved' => 1 ) );
 wp_insert_post( array( 'post_type' => 'fixact_item', 'post_title' => 'Active CPT', 'post_status' => 'publish' ) );
 
-foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
+foreach ( array( $uploads['basedir'] . '/wpforms', $uploads['basedir'] . '/zzold-cache', WP_CONTENT_DIR . '/wflogs', $uploads['basedir'] . '/fixdir-css-js', $uploads['basedir'] . '/fixdir-tail', $uploads['basedir'] . '/fixdir-nested', $uploads['basedir'] . '/zzgone-forms' ) as $dir ) {
 	wp_mkdir_p( $dir );
 	file_put_contents( $dir . '/data.txt', 'content of ' . basename( $dir ) );
 }
@@ -247,6 +247,7 @@ $expect = array(
 	'option|factory_plugin_versions'        => 'in_use',  // Framework signature name, referenced by a copy bundled in active code.
 	'file|uploads/fixdir-css-js'            => 'in_use',  // Folder named only as $base . '/fixdir-css-js'.
 	'file|uploads/fixdir-tail'              => 'in_use',  // Folder named only as "{$base}/fixdir-tail".
+	'file|uploads/fixdir-nested'            => 'in_use',  // Folder named only inside "{$base}/fixdir-nested/cache.css".
 	// Core / protected.
 	'option|siteurl'                        => 'core',
 	'option|cron'                           => 'core',
@@ -277,7 +278,7 @@ wpcu_assert( 'WPCU Fixture Active' === $by['meta|post:_fixcf_hero|slide_image|0|
 wpcu_assert( false !== strpos( $by['meta|post:_zzcf_gone|x|0|0|value']['reason'], 'Carbon Fields' ), 'unmatched Carbon Fields key explains its format' );
 wpcu_assert( 'medium' === $by['option|puc_external_updates_theme-wpcu-fixture-active']['confidence'], 'slug-only evidence has medium confidence' );
 wpcu_assert( 'WPCU Fixture Active' === $by['option|factory_plugin_versions']['owner'] && WPCleanup\Signatures::match( 'factory_plugin_versions' ), 'a framework signature name is attributed to the installed plugin bundling the framework' );
-wpcu_assert( 'WPCU Fixture Active' === $by['file|uploads/fixdir-css-js']['owner'] && 'WPCU Fixture Active' === $by['file|uploads/fixdir-tail']['owner'], 'folders named inside built paths are attributed to the code building them' );
+wpcu_assert( 'WPCU Fixture Active' === $by['file|uploads/fixdir-css-js']['owner'] && 'WPCU Fixture Active' === $by['file|uploads/fixdir-tail']['owner'] && 'WPCU Fixture Active' === $by['file|uploads/fixdir-nested']['owner'], 'folders named inside built paths are attributed to the code building them' );
 wpcu_assert( 'elementor' === $by['table|' . $p . 'e_events']['owner_slug'] && 'woocommerce' === $by['option|shop_single_image_size']['owner_slug'] && 'jetpack' === $by['option|post_by_email_address4']['owner_slug'], 'verified signatures name Elementor, WooCommerce and Jetpack' );
 $wpcu_sig = WPCleanup\Signatures::match( 'e_events' );
 wpcu_assert( $wpcu_sig && $wpcu_sig['exact'] && null === WPCleanup\Signatures::match( 'e_events_log' ), 'exact signature names match only themselves' );
@@ -412,6 +413,14 @@ wpcu_assert( 'unknown' === wpcu_status( $pby, 'option|wpseo_titles' ), 'orphaned
 wpcu_assert( 'core' === wpcu_status( $pby, 'option|siteurl' ), 'core protection unaffected' );
 $report = $cleaner->clean( array( 'option|wpseo_titles' ) );
 wpcu_assert( ! $report['deleted'], 'default policy deletes nothing while index is incomplete' );
+// Reviewing unknown items does not unlock items that are unknown only because code went unread.
+add_option( 'zzincomplete_leftover', 'x', '', 'no' );
+$report = $cleaner->clean( array( 'option|wpseo_titles', 'option|zzincomplete_leftover' ), array( 'allow_unknown' => true ) );
+wpcu_assert( ! $report['deleted'] && 2 === count( $report['refused'] ) && false !== get_option( 'wpseo_titles' ) && false !== get_option( 'zzincomplete_leftover' ), 'allow_unknown deletes nothing while index is incomplete' );
+wpcu_assert( false !== strpos( $report['refused'][0]['message'], 'could not be fully checked' ), 'refusal explains the incomplete index: ' . $report['refused'][0]['message'] );
+$dry = $cleaner->clean( array( 'orphan|postmeta' ), array( 'dry_run' => true ) );
+wpcu_assert( 1 === count( $dry['planned'] ), 'structural "safe" items stay deletable while index is incomplete' );
+delete_option( 'zzincomplete_leftover' );
 remove_filter( 'wp_cleanup_index_max_files', $one_file );
 $full = ( new Scanner() )->scan( array( 'option' ) );
 wpcu_assert( empty( $full['incomplete'] ) && 'orphaned' === wpcu_status( wpcu_items_by_key( $full['items'] ), 'option|wpseo_titles' ), 'full index restores orphaned status' );
@@ -425,6 +434,73 @@ ini_set( 'pcre.backtrack_limit', $wpcu_pcre[1] );
 $wpcu_class = ( new WPCleanup\Classifier( $broken ) )->classify( array( 'wpseo_titles' ) );
 wpcu_assert( $broken->incomplete_sources() && 'unknown' === $wpcu_class['status'], 'unreadable literals flag the source as incomplete, so nothing is called orphaned' );
 Code_Index::load( true ); // Replace the cached partial index.
+// A file that vanished or could not be stat'ed or read is not an empty, fully read file.
+$wpcu_index_file = new ReflectionMethod( Code_Index::class, 'index_file' );
+$wpcu_index_file->setAccessible( true );
+wpcu_assert( false === $wpcu_index_file->invoke( new Code_Index(), WP_PLUGIN_DIR . '/wpcu-fixture-active/zz-vanished.php', 0 ), 'a file that cannot be stat\'ed counts as unread' );
+if ( 'Windows' === PHP_OS_FAMILY ) { // Windows locks are mandatory, so a locked file reads short; elsewhere flock() is advisory.
+	$wpcu_locked = get_temp_dir() . 'wpcu-locked-' . wp_generate_password( 6, false ) . '.php';
+	file_put_contents( $wpcu_locked, str_repeat( "<?php 'zzlocked';\n", 50 ) );
+	$wpcu_handle = fopen( $wpcu_locked, 'r+' );
+	flock( $wpcu_handle, LOCK_EX );
+	wpcu_assert( false === $wpcu_index_file->invoke( new Code_Index(), $wpcu_locked, 0 ), 'a failed or short read counts as unread' );
+	flock( $wpcu_handle, LOCK_UN );
+	fclose( $wpcu_handle );
+	unlink( $wpcu_locked );
+}
+
+/* ---------------------------------------------------------------------- */
+/* 6b. Linked folders and deletion-time index                             */
+/* ---------------------------------------------------------------------- */
+
+WP_CLI::log( "\n6b. Linked folders and deletion-time index" );
+// Folders PHP loads code through a link are read, and a link loop ends.
+$wpcu_ext  = get_temp_dir() . 'wpcu-linked-' . wp_generate_password( 6, false );
+$wpcu_root = WP_PLUGIN_DIR . '/wpcu-fixture-active';
+$wpcu_link = static function ( $target, $link ) {
+	if ( @symlink( $target, $link ) ) { // phpcs:ignore
+		return true;
+	}
+	if ( 'Windows' !== PHP_OS_FAMILY ) {
+		return false;
+	}
+	exec( 'mklink /J ' . escapeshellarg( str_replace( '/', DIRECTORY_SEPARATOR, $link ) ) . ' ' . escapeshellarg( str_replace( '/', DIRECTORY_SEPARATOR, $target ) ), $out, $rc ); // Junctions need no privilege.
+	return 0 === $rc;
+};
+$wpcu_unlink = static function ( $link ) {
+	return 'Windows' === PHP_OS_FAMILY ? @rmdir( $link ) || @unlink( $link ) : @unlink( $link ); // phpcs:ignore -- removes the link, never its target.
+};
+wp_mkdir_p( $wpcu_ext );
+file_put_contents( $wpcu_ext . '/zzlinked.php', "<?php get_option( 'zzlinked_marker_option' );\n" );
+if ( $wpcu_link( $wpcu_ext, $wpcu_root . '/libs/zzlinked' ) && $wpcu_link( $wpcu_root, $wpcu_ext . '/zzloop' ) ) {
+	$wpcu_linked = Code_Index::load( true );
+	$wpcu_refs   = $wpcu_linked->references( 'zzlinked_marker_option' );
+	$wpcu_slugs  = array();
+	foreach ( $wpcu_refs['ids'] as $wpcu_id ) {
+		$wpcu_slugs[] = $wpcu_linked->source( $wpcu_id )['slug'];
+	}
+	wpcu_assert( in_array( 'wpcu-fixture-active', $wpcu_slugs, true ), 'code inside a linked folder is indexed' );
+	wpcu_assert( ! $wpcu_linked->incomplete_sources(), 'a link loop back to the plugin root is read once and leaves the index complete' );
+} else {
+	WP_CLI::warning( 'Could not create a folder link here; linked-folder checks skipped.' );
+}
+$wpcu_unlink( $wpcu_ext . '/zzloop' );
+$wpcu_unlink( $wpcu_root . '/libs/zzlinked' );
+unlink( $wpcu_ext . '/zzlinked.php' );
+rmdir( $wpcu_ext );
+wpcu_assert( ! file_exists( $wpcu_root . '/libs/zzlinked' ) && file_exists( $wpcu_root . '/wpcu-fixture-active.php' ), 'test links removed, fixture intact' );
+
+// Deletion re-checks against a rebuilt index: the cache key misses changes inside bundled libraries.
+Code_Index::load( true ); // Cache an index without the test links.
+add_option( 'wpseo_zzstale', 'x', '', 'no' );
+file_put_contents( $wpcu_root . '/libs/zzstale.php', "<?php get_option( 'wpseo_zzstale' );\n" );
+$wpcu_stale = wpcu_items_by_key( ( new Scanner() )->scan( array( 'option' ) )['items'] );
+wpcu_assert( 'orphaned' === wpcu_status( $wpcu_stale, 'option|wpseo_zzstale' ), 'precondition: the cached index misses a new file in a bundled library' );
+$report = $cleaner->clean( array( 'option|wpseo_zzstale' ) );
+wpcu_assert( ! $report['deleted'] && false !== get_option( 'wpseo_zzstale' ), 'deletion uses a rebuilt index and refuses the now-referenced item' );
+unlink( $wpcu_root . '/libs/zzstale.php' );
+delete_option( 'wpseo_zzstale' );
+Code_Index::load( true );
 
 /* ---------------------------------------------------------------------- */
 /* 7. Uninstall                                                           */

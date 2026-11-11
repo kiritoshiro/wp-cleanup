@@ -17,7 +17,7 @@ defined( 'ABSPATH' ) || exit;
 final class Code_Index {
 
 	const CACHE_FILE     = 'code-index.ser';
-	const FORMAT         = 6; // Bump when indexing rules change.
+	const FORMAT         = 7; // Bump when indexing rules change.
 	const MAX_FILE_BYTES = 8388608; // 8 MB; bigger PHP files are almost always generated data.
 	const MAX_FILES      = 40000;   // Per source. A source that hits a limit is flagged as incompletely indexed.
 
@@ -238,7 +238,7 @@ final class Code_Index {
 	/**
 	 * @param string $path    File or directory.
 	 * @param int    $budget  Remaining file budget (by reference).
-	 * @param bool   $unread  Set when a directory could not be listed (by reference).
+	 * @param bool   $unread  Set when a directory could not be resolved or listed (by reference).
 	 * @return \Generator<string>
 	 */
 	private function php_files( $path, &$budget, &$unread ) {
@@ -251,9 +251,20 @@ final class Code_Index {
 			return;
 		}
 		$stack = array( $path );
+		$seen  = array();
 		while ( $stack ) { // The budget is checked per file so exhaustion always leaves it negative.
-			$dir     = array_pop( $stack );
-			$entries = @scandir( $dir ); // phpcs:ignore
+			$dir  = array_pop( $stack );
+			$real = realpath( $dir );
+			if ( false === $real ) {
+				$unread = true;
+				continue;
+			}
+			// Symlinked folders are followed (PHP loads code through them); a loop or a folder linked twice is read once.
+			if ( isset( $seen[ $real ] ) ) {
+				continue;
+			}
+			$seen[ $real ] = true;
+			$entries       = @scandir( $dir ); // phpcs:ignore
 			if ( ! $entries ) {
 				$unread = true; // Code PHP can include but not list is still code.
 				continue;
@@ -264,7 +275,7 @@ final class Code_Index {
 				}
 				$full = $dir . '/' . $entry;
 				if ( is_dir( $full ) ) {
-					if ( ! is_link( $full ) && ! in_array( strtolower( $entry ), self::SKIP_DIRS, true ) ) {
+					if ( ! in_array( strtolower( $entry ), self::SKIP_DIRS, true ) ) {
 						$stack[] = $full;
 					}
 				} elseif ( substr( $entry, -4 ) === '.php' || substr( $entry, -4 ) === '.inc' ) {
@@ -283,24 +294,34 @@ final class Code_Index {
 	 * @return bool False when the file could not be indexed.
 	 */
 	private function index_file( $file, $id ) {
-		$size = (int) @filesize( $file ); // phpcs:ignore
+		$size = @filesize( $file ); // phpcs:ignore
+		if ( false === $size || $size > self::MAX_FILE_BYTES ) {
+			return false; // A file that vanished or can't be stat'ed is not an empty one.
+		}
 		if ( 0 === $size ) {
 			return true;
 		}
-		if ( $size < 0 || $size > self::MAX_FILE_BYTES || ! is_readable( $file ) ) {
-			return false;
+		$code = @file_get_contents( $file ); // phpcs:ignore
+		if ( false === $code || strlen( $code ) < $size ) {
+			return false; // Failed or short read.
 		}
-		$code = (string) file_get_contents( $file ); // phpcs:ignore
 		// Single- or double-quoted identifier-like literals; path literals also count per segment,
 		// since folders are often built as $base . '/name'. A regex failure leaves the file unread.
 		if ( false === preg_match_all( '/[\'"]([A-Za-z0-9_\-\.:\/]{3,255})[\'"]/', $code, $m ) ) {
 			return false;
 		}
-		// Last segment of interpolated paths ("{$dir}/name"), which the pattern above cannot see.
-		if ( false === preg_match_all( '/\/([A-Za-z0-9_\-\.]{3,150})\/?[\'"]/', $code, $tails ) ) {
+		// Segments after the first slash of interpolated paths ("{$dir}/name/file.css"), which the pattern above cannot see.
+		if ( false === preg_match_all( '/\/([A-Za-z0-9_\-\.\/]{3,255})[\'"]/', $code, $tails ) ) {
 			return false;
 		}
-		$literals = $tails[1];
+		$literals = array();
+		foreach ( array_unique( $tails[1] ) as $tail ) {
+			foreach ( explode( '/', $tail ) as $part ) {
+				if ( strlen( $part ) >= 3 && strlen( $part ) <= 150 ) {
+					$literals[] = $part;
+				}
+			}
+		}
 		foreach ( array_unique( $m[1] ) as $literal ) {
 			$parts = array( $literal );
 			if ( false !== strpos( $literal, '/' ) ) {
