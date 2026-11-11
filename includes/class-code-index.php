@@ -17,7 +17,7 @@ defined( 'ABSPATH' ) || exit;
 final class Code_Index {
 
 	const CACHE_FILE     = 'code-index.ser';
-	const FORMAT         = 5; // Bump when indexing rules change.
+	const FORMAT         = 7; // Bump when indexing rules change.
 	const MAX_FILE_BYTES = 8388608; // 8 MB; bigger PHP files are almost always generated data.
 	const MAX_FILES      = 40000;   // Per source. A source that hits a limit is flagged as incompletely indexed.
 
@@ -210,11 +210,12 @@ final class Code_Index {
 		foreach ( $this->sources as $id => $source ) {
 			$budget = $max;
 			$whole  = true;
-			foreach ( $this->php_files( $source['path'], $budget ) as $file ) {
+			$unread = false;
+			foreach ( $this->php_files( $source['path'], $budget, $unread ) as $file ) {
 				$whole = $this->index_file( $file, $id ) && $whole;
 			}
 			// Fail safe: callers treat names as possibly in use while any source is incomplete.
-			$this->sources[ $id ]['incomplete'] = ! $whole || $budget < 0;
+			$this->sources[ $id ]['incomplete'] = ! $whole || $unread || $budget < 0;
 		}
 	}
 
@@ -237,9 +238,10 @@ final class Code_Index {
 	/**
 	 * @param string $path    File or directory.
 	 * @param int    $budget  Remaining file budget (by reference).
+	 * @param bool   $unread  Set when a directory could not be resolved or listed (by reference).
 	 * @return \Generator<string>
 	 */
-	private function php_files( $path, &$budget ) {
+	private function php_files( $path, &$budget, &$unread ) {
 		if ( is_file( $path ) ) {
 			--$budget;
 			yield $path;
@@ -249,10 +251,22 @@ final class Code_Index {
 			return;
 		}
 		$stack = array( $path );
+		$seen  = array();
 		while ( $stack ) { // The budget is checked per file so exhaustion always leaves it negative.
-			$dir     = array_pop( $stack );
-			$entries = @scandir( $dir ); // phpcs:ignore
+			$dir  = array_pop( $stack );
+			$real = realpath( $dir );
+			if ( false === $real ) {
+				$unread = true;
+				continue;
+			}
+			// Symlinked folders are followed (PHP loads code through them); a loop or a folder linked twice is read once.
+			if ( isset( $seen[ $real ] ) ) {
+				continue;
+			}
+			$seen[ $real ] = true;
+			$entries       = @scandir( $dir ); // phpcs:ignore
 			if ( ! $entries ) {
+				$unread = true; // Code PHP can include but not list is still code.
 				continue;
 			}
 			foreach ( $entries as $entry ) {
@@ -261,7 +275,7 @@ final class Code_Index {
 				}
 				$full = $dir . '/' . $entry;
 				if ( is_dir( $full ) ) {
-					if ( ! is_link( $full ) && ! in_array( strtolower( $entry ), self::SKIP_DIRS, true ) ) {
+					if ( ! in_array( strtolower( $entry ), self::SKIP_DIRS, true ) ) {
 						$stack[] = $full;
 					}
 				} elseif ( substr( $entry, -4 ) === '.php' || substr( $entry, -4 ) === '.inc' ) {
@@ -280,26 +294,60 @@ final class Code_Index {
 	 * @return bool False when the file could not be indexed.
 	 */
 	private function index_file( $file, $id ) {
-		$size = (int) @filesize( $file ); // phpcs:ignore
+		$size = @filesize( $file ); // phpcs:ignore
+		if ( false === $size || $size > self::MAX_FILE_BYTES ) {
+			return false; // A file that vanished or can't be stat'ed is not an empty one.
+		}
 		if ( 0 === $size ) {
 			return true;
 		}
-		if ( $size < 0 || $size > self::MAX_FILE_BYTES || ! is_readable( $file ) ) {
+		$code = @file_get_contents( $file ); // phpcs:ignore
+		if ( false === $code || strlen( $code ) < $size ) {
+			return false; // Failed or short read.
+		}
+		// Single- or double-quoted identifier-like literals; path literals also count per segment,
+		// since folders are often built as $base . '/name'. A regex failure leaves the file unread.
+		if ( false === preg_match_all( '/[\'"]([A-Za-z0-9_\-\.:\/]{3,255})[\'"]/', $code, $m ) ) {
 			return false;
 		}
-		$code = (string) file_get_contents( $file ); // phpcs:ignore
-		// Single- or double-quoted identifier-like literals, 3..150 chars.
-		preg_match_all( '/[\'"]([A-Za-z0-9_\-\.:]{3,150})[\'"]/', $code, $m );
-		// Declared class/interface/trait names: names like 'schema-' . static::class end with one.
-		if ( preg_match_all( '/\b(?:class|interface|trait)\s+([A-Za-z_][A-Za-z0-9_]{7,120})\b/', $code, $d ) ) {
-			foreach ( array_unique( $d[1] ) as $class ) {
-				$class = strtolower( $class );
-				if ( ! isset( $this->classes[ $class ] ) || ! in_array( $id, $this->classes[ $class ], true ) ) {
-					$this->classes[ $class ][] = $id;
+		// Segments after the first slash of interpolated paths ("{$dir}/name/file.css"), which the pattern above cannot see.
+		if ( false === preg_match_all( '/\/([A-Za-z0-9_\-\.\/]{3,255})[\'"]/', $code, $tails ) ) {
+			return false;
+		}
+		$literals = array();
+		foreach ( array_unique( $tails[1] ) as $tail ) {
+			foreach ( explode( '/', $tail ) as $part ) {
+				if ( strlen( $part ) >= 3 && strlen( $part ) <= 150 ) {
+					$literals[] = $part;
 				}
 			}
 		}
 		foreach ( array_unique( $m[1] ) as $literal ) {
+			$parts = array( $literal );
+			if ( false !== strpos( $literal, '/' ) ) {
+				// Plugin files ('wpforms/wpforms.php') name another plugin to check for, not a folder this code uses.
+				if ( preg_match( '/^[A-Za-z0-9_\-\.]+\/[A-Za-z0-9_\-\.]+\.php$/', $literal ) ) {
+					continue;
+				}
+				$parts = explode( '/', $literal );
+			}
+			foreach ( $parts as $part ) {
+				if ( strlen( $part ) >= 3 && strlen( $part ) <= 150 ) {
+					$literals[] = $part;
+				}
+			}
+		}
+		// Declared class/interface/trait names: names like 'schema-' . static::class end with one.
+		if ( false === preg_match_all( '/\b(?:class|interface|trait)\s+([A-Za-z_][A-Za-z0-9_]{7,120})\b/', $code, $d ) ) {
+			return false;
+		}
+		foreach ( array_unique( $d[1] ) as $class ) {
+			$class = strtolower( $class );
+			if ( ! isset( $this->classes[ $class ] ) || ! in_array( $id, $this->classes[ $class ], true ) ) {
+				$this->classes[ $class ][] = $id;
+			}
+		}
+		foreach ( array_unique( $literals ) as $literal ) {
 			$literal = strtolower( $literal );
 			if ( ctype_digit( $literal ) ) {
 				continue;
